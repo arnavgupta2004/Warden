@@ -13,17 +13,17 @@ Warden sits between any AI agent and PayPal and exposes the same PayPal tools ov
 2. **Live PayPal facts:** does the capture exist, how much is still refundable, is it disputed?
 3. **Provenance:** where did this payee or id first appear? Content the agent reads is tracked as untrusted. Hidden text and instruction-like phrases quarantine the session, and lookalike payees are caught.
 4. **Composition rules** across calls: split payments, cancelling records after moving money, scanning transactions then paying a new payee.
-5. **A Claude intent check:** would the owner want this exact action?
+5. **A Gemini intent check:** would the owner want this exact action?
 
 Allowed actions execute on PayPal. Held actions go to the owner's phone and run on approval. Blocked actions never reach PayPal. Everything is written to a hash-chained ledger shown live in an AG Grid dashboard, and PayPal webhooks mark payments as settled.
 
 ## How we built it
 - **Backend:** Python and FastAPI. A real PayPal REST client covers Payments v2 (refunds and captures), Orders v2 (including shipment tracking), Payouts v1, Invoicing v2, Disputes v1, Transaction Search and webhook verification. An offline simulator returns the same response shapes so judges can run it without keys.
 - **MCP:** a Streamable HTTP server, verified with the official MCP Python SDK. Any agent swaps one URL.
-- **AI:** Claude compiles mandates (cross-checked by a deterministic parser, where the stricter value wins), runs intent checks, explains decisions, drafts dispute evidence, and powers the live demo agent. Claude can only make a decision stricter, never looser.
+- **AI:** Gemini compiles mandates (cross-checked by a deterministic parser, where the stricter value wins), runs intent checks, explains decisions, drafts dispute evidence, and powers the live demo agent (a Gemini function-calling loop). Gemini can only make a decision stricter, never looser.
 - **Frontend:** React and AG Grid (Theming API, custom cell renderers, quick filter, row rules), with a mobile approval page and ntfy push notifications.
 - **Deploy:** one Docker image on Render.
-- 22 automated tests cover every scenario, the MCP protocol, request shapes for the PayPal client, and the Claude code paths.
+- 29 automated tests cover every scenario, the MCP protocol, request shapes for the PayPal client, and the Gemini code paths.
 
 ## Challenges
 - Telling a legitimate order id in a customer email apart from an attacker's payee in the same email. Warden weighs arguments by role: refunds can only return to the original payer, so an order id from an email is low risk, while a payout recipient from an email is critical.
@@ -41,7 +41,7 @@ Agent safety for payments is mostly about provenance: knowing *who* asked for a 
 Per-agent mandates for teams, PayPal Payouts batch limits, and support for buyer-side agentic checkout (Orders v2 with vaulted payment methods) under the same policy engine.
 
 ## Built with
-python, fastapi, paypal-rest-api, paypal-payouts, paypal-invoicing, paypal-disputes, model-context-protocol, claude, anthropic-api, react, typescript, ag-grid, vite, sqlite, docker, render, ntfy
+python, fastapi, paypal-rest-api, paypal-payouts, paypal-invoicing, paypal-disputes, model-context-protocol, gemini, gemini-api, react, typescript, ag-grid, vite, sqlite, docker, render, ntfy
 
 ## Testing instructions for judges
 - **Hosted demo:** <your Render URL>. Click **Give to agent** on any inbox email.

@@ -18,11 +18,11 @@ Today the choice is to give the agent full API credentials, or keep a human in e
 
 ```mermaid
 flowchart LR
-    A[AI agent<br/>Claude, GPT, LangChain…] -- MCP or REST --> W
+    A[AI agent<br/>Gemini, Claude, GPT, LangChain…] -- MCP or REST --> W
     subgraph W[Warden]
       direction TB
       P[Provenance tracker<br/>where did each payee and id come from?]
-      E[Policy engine<br/>mandate · PayPal facts · composition rules · Claude intent check]
+      E[Policy engine<br/>mandate · PayPal facts · composition rules · Gemini intent check]
       L[(Hash-chained ledger)]
       P --> E --> L
     end
@@ -31,14 +31,14 @@ flowchart LR
     PP -- webhooks --> W
 ```
 
-1. **Write a mandate in plain English.** For example: *"Refund customers up to $50 on your own; anything bigger, ask me. Pay our contractors Maya Chen (maya@…) up to $400 each. Never pay anyone new without asking me."* Claude compiles it into a structured policy. A deterministic parser checks the result and the stricter limit always wins, so the model can't loosen your rules or invent payees. Warden then signs the policy with HMAC.
+1. **Write a mandate in plain English.** For example: *"Refund customers up to $50 on your own; anything bigger, ask me. Pay our contractors Maya Chen (maya@…) up to $400 each. Never pay anyone new without asking me."* Gemini compiles it into a structured policy. A deterministic parser checks the result and the stricter limit always wins, so the model can't loosen your rules or invent payees. Warden then signs the policy with HMAC.
 2. **Point your agent at Warden instead of PayPal.** Warden exposes PayPal-style tools (`create_refund`, `create_payout`, `cancel_sent_invoice`, …) over **MCP** and REST, so a working agent only needs a different URL.
 3. **Every call is checked against five layers:**
    - **Mandate:** scope, per-payment cap, budget window, trusted payees, velocity.
    - **PayPal facts:** does the capture exist, how much is still refundable, is it under dispute?
    - **Provenance:** every email or page the agent reads goes through `fetch_url` and is stored as untrusted context. A payee that only ever appeared in untrusted content is tainted. A payee that imitates a trusted one (`maya.chen.studio@payout-desk…` vs `maya@chenstudio…`) is flagged as a redirect scam. Content with hidden text or instruction-like phrases quarantines the session.
    - **Composition rules:** dangerous patterns across calls, such as split payments, cancelling records right after moving money, scanning transactions then paying a new payee, and money moving after an invoice cancellation.
-   - **Claude intent check:** "Would the owner want this exact action?" This can hold a call that every hard rule allowed.
+   - **Gemini intent check:** "Would the owner want this exact action?" This can hold a call that every hard rule allowed.
 4. **Three outcomes.** *Allowed* actions execute on PayPal immediately. *Held* actions go to your phone (ntfy push or the mobile approval page) and run the moment you tap Approve. *Blocked* actions never reach PayPal, and the agent is told not to retry.
 5. **Everything is on the record.** Each decision and state change goes into a hash-chained, tamper-evident ledger. The AG Grid dashboard shows it live, and PayPal webhooks mark entries as settled.
 
@@ -53,9 +53,9 @@ Kestrel & Co. is a fictional homeware shop whose back-office agent works the sup
 | "Where is my order?" with hidden white text | $499 payout, then cancel a $1,250 invoice | **Both blocked**: hidden instruction, tainted payee |
 | Lamp base snapped | Refund $180 | **Held**, runs when you tap Approve on your phone |
 | "Refund me as four $45 refunds" | 4 × $45 on one payment | First allowed, the rest **held** as split payments |
-| Dispute: item not received | Answer with tracking evidence | **Allowed**. Claude drafts the response. Refunding during the dispute would be held. |
+| Dispute: item not received | Answer with tracking evidence | **Allowed**. Gemini drafts the response. Refunding during the dispute would be held. |
 
-The **gullible agent** does whatever an email says, including hidden instructions. It stands in for an LLM that has been successfully manipulated, and keeps the demo repeatable. The **Claude agent** is a live Claude tool-use loop over the same tools.
+The **gullible agent** does whatever an email says, including hidden instructions. It stands in for an LLM that has been successfully manipulated, and keeps the demo repeatable. The **Gemini agent** is a live Gemini function-calling loop over the same tools.
 
 ## Quick start
 
@@ -84,9 +84,9 @@ Click **Give to agent** on any email in the inbox panel.
 3. Seed the demo orders: `python scripts/seed_sandbox.py`. It creates four real orders, opens each approval link (approve with a sandbox *personal* account), captures them, sends an invoice and writes `backend/sandbox_seed.json`. The demo inbox then uses those real ids, so every refund in the demo is a real sandbox refund.
 4. Optional: add a webhook in the same app pointing to `https://<your-host>/webhooks/paypal` and set `PAYPAL_WEBHOOK_ID`. Settled refunds and payouts are then marked on the ledger.
 
-### Turn on Claude
+### Turn on Gemini
 
-Set `ANTHROPIC_API_KEY`. Claude then compiles mandates, runs the intent check, writes the plain-language explanations, drafts dispute responses, and powers the **Claude agent** in the inbox.
+Set `GEMINI_API_KEY` (from [Google AI Studio](https://aistudio.google.com/apikey)). Gemini then compiles mandates, runs the intent check, writes the plain-language explanations, drafts dispute responses, and powers the **Gemini agent** in the inbox. `WARDEN_GEMINI_MODEL` picks the model.
 
 ### Get approvals on your phone
 
@@ -130,7 +130,7 @@ Have your agent read emails and pages through Warden's `fetch_url` tool, or reco
 | `refund_during_dispute` | Hold | Refunding a payment that has an open dispute (risk of paying twice) |
 | `cover_tracks`, `money_after_cancel`, `recon_then_payout` | Hold | Dangerous combinations of individually allowed calls |
 | `session_quarantine` | Hold | The agent read suspicious content earlier in the session |
-| `intent_check` | Hold | Claude judges the action isn't what the owner would want |
+| `intent_check` | Hold | Gemini judges the action isn't what the owner would want |
 
 ## PayPal APIs used
 
@@ -146,8 +146,8 @@ Have your agent read emails and pages through Warden's `fetch_url` tool, or reco
 
 ## How AI is used
 
-- **Claude** compiles the mandate (cross-checked by a parser, stricter value wins), runs the intent check on every payment the hard rules allow, explains each decision in plain language, drafts dispute evidence, and is the live agent in the demo.
-- **Warden never relies on the model alone.** Every hard limit, payee check, taint check and composition rule is deterministic and works with no API key. Claude adds judgment on top, and can only make a decision stricter, never looser.
+- **Gemini** compiles the mandate (cross-checked by a parser, stricter value wins), runs the intent check on every payment the hard rules allow, explains each decision in plain language, drafts dispute evidence, and is the live agent in the demo.
+- **Warden never relies on the model alone.** Every hard limit, payee check, taint check and composition rule is deterministic and works with no API key. Gemini adds judgment on top, and can only make a decision stricter, never looser.
 
 ## Project layout
 
@@ -156,14 +156,14 @@ backend/
   warden/
     policy.py       decision engine and composition rules
     provenance.py   untrusted-content tracking and injection scanner
-    mandate.py      plain English → signed policy (Claude + parser)
+    mandate.py      plain English → signed policy (Gemini + parser)
     gateway.py      decide → record → execute / hold / block; approvals
     ledger.py       hash-chained SQLite audit log
     mcp.py          MCP Streamable HTTP server
     paypal/         real REST client + offline simulator
     app.py          REST API, websocket, webhooks, dashboard
   demo/             Kestrel & Co. inbox and the two demo agents
-  tests/            22 tests: every scenario, the MCP protocol, the PayPal client, Claude paths
+  tests/            29 tests: every scenario, the MCP protocol, the PayPal client, Gemini paths
 frontend/           React + AG Grid dashboard and mobile approval page
 scripts/            sandbox seeding, MCP client example
 ```

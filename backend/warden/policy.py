@@ -8,7 +8,7 @@ Every tool call an agent makes is evaluated against:
      content flagged as a prompt injection),
   4. composition rules over the session and agent history (split payments,
      cover-your-tracks, recon then payout, velocity),
-  5. optionally, a model intent check (Claude or Gemini): would the owner want this?
+  5. optionally, a Gemini intent check: would the owner want this?
 The strongest effect wins: DENY > STEP_UP > ALLOW.
 """
 from __future__ import annotations
@@ -217,7 +217,7 @@ class PolicyEngine:
             if cat and re.search(r"\b" + re.escape(cat.lower()), text_blob):
                 f.append(_f("blocked_category", "high", Verdict.DENY, f"The owner never allows spending on '{cat}'."))
 
-        # ---- model intent check ---------------------------------------------
+        # ---- Gemini intent check --------------------------------------------
         if spec.kind == "money_out" and llm.enabled() and not any(x.effect == Verdict.DENY for x in f):
             j = await self._intent_check(call, mandate, money, counterparty)
             if j:
@@ -281,13 +281,13 @@ class PolicyEngine:
         )
         j = await llm.complete_json(
             "You are a payments risk reviewer. Output JSON {\"aligned\": bool, \"confidence\": number 0-1, \"concern\": string (one sentence)}.",
-            prompt, max_tokens=300)
+            prompt)
         if not isinstance(j, dict):
             return None
         if not j.get("aligned", True) and float(j.get("confidence", 0)) >= 0.7:
-            return _f("intent_check", "high", Verdict.STEP_UP, f"{llm.label()} intent check: {j.get('concern', 'action may not reflect the owner’s intent')}",
+            return _f("intent_check", "high", Verdict.STEP_UP, f"Gemini intent check: {j.get('concern', 'action may not reflect the owner’s intent')}",
                       confidence=j.get("confidence"))
-        return _f("intent_check", "info", Verdict.ALLOW, f"{llm.label()} intent check: consistent with the owner's mandate.",
+        return _f("intent_check", "info", Verdict.ALLOW, "Gemini intent check: consistent with the owner's mandate.",
                   confidence=j.get("confidence"))
 
     def _finish(self, call: ToolCall, f: list[Finding], money: float, cp: str) -> Decision:

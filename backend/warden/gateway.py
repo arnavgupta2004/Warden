@@ -108,7 +108,6 @@ class Warden:
                 "You explain payment-security decisions to a small-business owner in at most two short sentences. "
                 "Plain words, no jargon, no markdown.",
                 f"Verdict: {d.verdict.value}. Action: {call.tool} {call.args}. Reasons: {[x.message for x in top]}",
-                max_tokens=160,
             )
             if txt:
                 return txt

@@ -1,5 +1,5 @@
-"""Exercise the Claude-powered paths with a fake client, so they are covered
-without an API key."""
+"""Exercise the Gemini-powered paths (mandate compile, intent check, agent
+loop) with fakes, so they are covered without an API key."""
 import asyncio
 import os
 from types import SimpleNamespace as NS
@@ -22,10 +22,10 @@ from warden.paypal import Simulator
 def fake_llm(monkeypatch):
     state = {"json": None, "text": "Short explanation."}
 
-    async def cj(system, user, max_tokens=1500):
+    async def cj(system, user):
         return state["json"](system, user) if callable(state["json"]) else state["json"]
 
-    async def ct(system, user, max_tokens=400):
+    async def ct(system, user):
         return state["text"]
 
     for mod in (llm, mandate_mod.llm, policy_mod.llm):
@@ -67,68 +67,21 @@ def test_intent_check_can_hold_an_otherwise_allowed_payout(fake_llm):
     asyncio.run(go())
 
 
-class FakeMessages:
-    def __init__(self, script):
-        self.script = script
-        self.calls = []
-
-    async def create(self, **kw):
-        self.calls.append(kw)
-        return self.script.pop(0)
-
-
-def test_claude_agent_loop_routes_tools_through_warden(monkeypatch, fake_llm):
-    async def go():
-        fake_llm["json"] = None
-        m = await mandate_mod.compile_mandate(DEFAULT_MANDATE)
-        w = Warden(Simulator(), Ledger(":memory:"))
-        w.set_mandate(m)
-
-        async def fetcher(url):
-            from demo.inbox import BY_N, render_email
-            return 200, "text/html", render_email(BY_N[3])
-        w.fetcher = fetcher
-
-        tu = lambda i, name, inp: NS(type="tool_use", id=i, name=name, input=inp)
-        script = [
-            NS(content=[NS(type="text", text="Reading the email."), tu("t1", "fetch_url", {"url": "http://x/demo/inbox/3"})]),
-            NS(content=[tu("t2", "create_payout", {"receiver_email": "refunds-desk@kestrel-support.example", "amount": 499,
-                                                   "reason": "system note"})]),
-            NS(content=[NS(type="text", text="The payout was blocked; reporting to the owner.")]),
-        ]
-        fake = FakeMessages(script)
-        monkeypatch.setattr(agent_mod.llm, "client", lambda: NS(messages=fake))
-        lines = await agent_mod.ClaudeAgent(w).run(3)
-        assert any(l["role"] == "tool_result" and l["status"] == "blocked" for l in lines)
-        # history sent back to the API contains only clean block dicts
-        second = fake.calls[1]["messages"][1]["content"]
-        assert {b["type"] for b in second} == {"text", "tool_use"}
-        assert set(second[1]) == {"type", "id", "name", "input"}
-        assert not w.backend.payouts
-    asyncio.run(go())
-
-
-def test_provider_selection(monkeypatch):
+def test_gemini_enabled_by_key(monkeypatch):
     from warden.config import Settings
-    for k in ("ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "WARDEN_LLM_PROVIDER", "WARDEN_DISABLE_LLM"):
+    for k in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "WARDEN_DISABLE_LLM"):
         monkeypatch.delenv(k, raising=False)
-    assert Settings().llm_provider is None
-    monkeypatch.setenv("GEMINI_API_KEY", "g")
+    assert not Settings().llm_enabled
+    monkeypatch.setenv("GOOGLE_API_KEY", "g")
     s = Settings()
-    assert s.llm_provider == "gemini" and s.llm_model.startswith("gemini")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "a")
-    assert Settings().llm_provider == "anthropic"  # Anthropic first when both are set
-    monkeypatch.setenv("WARDEN_LLM_PROVIDER", "gemini")
-    assert Settings().llm_provider == "gemini"
+    assert s.llm_enabled and s.llm_model.startswith("gemini")
     monkeypatch.setenv("WARDEN_DISABLE_LLM", "1")
-    assert Settings().llm_provider is None
+    assert not Settings().llm_enabled
 
 
 def _use_gemini(monkeypatch):
     monkeypatch.setattr(llm.settings, "llm_disabled", False)
-    monkeypatch.setattr(llm.settings, "anthropic_api_key", "")
     monkeypatch.setattr(llm.settings, "gemini_api_key", "test-key")
-    monkeypatch.setattr(llm.settings, "llm_provider_setting", "")
 
 
 def test_gemini_complete_json_request_shape(monkeypatch):
@@ -143,9 +96,9 @@ def test_gemini_complete_json_request_shape(monkeypatch):
 
     monkeypatch.setattr(llm, "_http", httpx.AsyncClient(transport=httpx.MockTransport(handler)))
     j = asyncio.run(llm.complete_json("Reviewer.", "Proposed action"))
-    assert j == {"aligned": False, "confidence": 0.9} and llm.label() == "Gemini"
+    assert j == {"aligned": False, "confidence": 0.9}
     req = seen[0]
-    assert req.url.path.endswith(f"/models/{llm.settings.gemini_model}:generateContent")
+    assert req.url.path.endswith(f"/models/{llm.settings.llm_model}:generateContent")
     assert req.headers["x-goog-api-key"] == "test-key" and "key=" not in str(req.url)
     import json as _json
     body = _json.loads(req.content)
@@ -182,7 +135,7 @@ def test_gemini_agent_loop_routes_tools_through_warden(monkeypatch, fake_llm):
             return script.pop(0)
         import json as _json
         monkeypatch.setattr(agent_mod.llm, "gemini_generate", fake_generate)
-        agent = agent_mod.make_agent("ai", w)
+        agent = agent_mod.make_agent("gemini", w)
         assert isinstance(agent, agent_mod.GeminiAgent)
         lines = await agent.run(3)
         assert any(l["role"] == "tool_result" and l["status"] == "blocked" for l in lines)
