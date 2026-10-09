@@ -140,7 +140,7 @@ Have your agent read emails and pages through Warden's `fetch_url` tool, or reco
 | Contractor payouts | Payouts v1: `payments/payouts` |
 | Invoices (send, remind, cancel) | Invoicing v2 |
 | Disputes (read, provide evidence, accept claim) | Customer Disputes v1 |
-| Shipment tracking | Tracking v1: `shipping/trackers-batch` |
+| Shipment tracking | Orders v2: `checkout/orders/{id}/track` |
 | Account activity | Transaction Search v1: `reporting/transactions` |
 | Settlement | Webhooks, with signature verification through `notifications/verify-webhook-signature` |
 

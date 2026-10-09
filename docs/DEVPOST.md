@@ -18,7 +18,7 @@ Warden sits between any AI agent and PayPal and exposes the same PayPal tools ov
 Allowed actions execute on PayPal. Held actions go to the owner's phone and run on approval. Blocked actions never reach PayPal. Everything is written to a hash-chained ledger shown live in an AG Grid dashboard, and PayPal webhooks mark payments as settled.
 
 ## How we built it
-- **Backend:** Python and FastAPI. A real PayPal REST client covers Payments v2 (refunds and captures), Orders v2, Payouts v1, Invoicing v2, Disputes v1, Tracking v1, Transaction Search and webhook verification. An offline simulator returns the same response shapes so judges can run it without keys.
+- **Backend:** Python and FastAPI. A real PayPal REST client covers Payments v2 (refunds and captures), Orders v2 (including shipment tracking), Payouts v1, Invoicing v2, Disputes v1, Transaction Search and webhook verification. An offline simulator returns the same response shapes so judges can run it without keys.
 - **MCP:** a Streamable HTTP server, verified with the official MCP Python SDK. Any agent swaps one URL.
 - **AI:** Claude compiles mandates (cross-checked by a deterministic parser, where the stricter value wins), runs intent checks, explains decisions, drafts dispute evidence, and powers the live demo agent. Claude can only make a decision stricter, never looser.
 - **Frontend:** React and AG Grid (Theming API, custom cell renderers, quick filter, row rules), with a mobile approval page and ntfy push notifications.

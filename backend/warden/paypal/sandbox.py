@@ -1,5 +1,5 @@
 """Real PayPal REST client (sandbox or live), using the v2 Orders/Payments,
-v1 Payouts, v2 Invoicing, v1 Disputes, v1 Tracking and v1 Reporting APIs."""
+v1 Payouts, v2 Invoicing, v1 Disputes and v1 Reporting APIs."""
 from __future__ import annotations
 
 import json
@@ -13,11 +13,10 @@ import httpx
 from .errors import PayPalError
 
 
-# Common values from PayPal's carrier enum (checked against the Disputes v1 spec).
-# Anything else is sent as OTHER plus carrier_name_other, which both the Disputes
-# and Tracking APIs require for carriers outside the enum.
-KNOWN_CARRIERS = {"UPS", "USPS", "FEDEX", "DHL", "ONTRAC", "CANADA_POST", "ROYAL_MAIL", "AUSTRALIA_POST",
-                  "AMAZON", "DPD", "GLS", "TNT", "PUROLATOR", "CHINA_POST"}
+# Carrier codes valid in both the Disputes v1 and Orders v2 carrier enums.
+# Anything else is sent as OTHER plus carrier_name_other, which both APIs
+# require for carriers outside the enum.
+KNOWN_CARRIERS = {"UPS", "USPS", "FEDEX", "DHL", "ONTRAC", "ROYAL_MAIL", "AMAZON", "DPD", "GLS", "TNT", "PUROLATOR"}
 
 
 def _carrier(name: str, key: str) -> dict[str, str]:
@@ -232,9 +231,14 @@ class PayPalSandbox:
                                files={"input": (None, json.dumps(payload), "application/json")})
 
     async def t_create_shipment_tracking(self, capture_id: str, tracking_number: str, carrier: str):
-        return await self._req("POST", "/v1/shipping/trackers-batch", {
-            "trackers": [{"transaction_id": capture_id, "tracking_number": tracking_number, "status": "SHIPPED",
-                          **_carrier(carrier, "carrier")}]})
+        # Orders v2 tracking (replaces the deprecated /v1/shipping/trackers-batch).
+        c = await self._req("GET", f"/v2/payments/captures/{capture_id}")
+        order_id = c.get("supplementary_data", {}).get("related_ids", {}).get("order_id")
+        if not order_id:
+            raise PayPalError(422, "ORDER_NOT_FOUND", f"Capture {capture_id} has no related order to add tracking to.")
+        return await self._req("POST", f"/v2/checkout/orders/{order_id}/track", {
+            "capture_id": capture_id, "tracking_number": tracking_number, **_carrier(carrier, "carrier"),
+            "notify_payer": False}, idempotent=True)
 
     async def verify_webhook(self, headers: dict[str, str], event: dict[str, Any], webhook_id: str) -> bool:
         body = {

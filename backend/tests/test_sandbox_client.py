@@ -5,6 +5,7 @@ import json
 
 import httpx
 
+from warden.paypal.errors import PayPalError
 from warden.paypal.sandbox import PayPalSandbox
 
 
@@ -151,13 +152,60 @@ def test_dispute_evidence_carrier_outside_enum_uses_other():
     asyncio.run(go())
 
 
-def test_shipment_tracking_carrier_outside_enum_uses_other():
+def test_shipment_tracking_uses_orders_v2_track():
+    routes = {
+        ("GET", "/v2/payments/captures/CAP1"): {"id": "CAP1", "supplementary_data": {"related_ids": {"order_id": "ORD1"}}},
+        ("POST", "/v2/checkout/orders/ORD1/track"): lambda req: httpx.Response(201, json={"id": "ORD1"}),
+        ("GET", "/v2/payments/captures/CAP2"): {"id": "CAP2"},
+    }
+
     async def go():
-        pp, seen = _client({("POST", "/v1/shipping/trackers-batch"): {"tracker_identifiers": []}})
+        pp, seen = _client(routes)
         await pp.call("create_shipment_tracking", {"capture_id": "CAP1", "tracking_number": "LF1", "carrier": "Lumen Freight"})
         await pp.call("create_shipment_tracking", {"capture_id": "CAP1", "tracking_number": "1Z9", "carrier": "UPS"})
-        trackers = [json.loads(r.content)["trackers"][0] for r in seen if r.url.path == "/v1/shipping/trackers-batch"]
-        assert trackers[0] == {"transaction_id": "CAP1", "tracking_number": "LF1", "status": "SHIPPED",
-                               "carrier": "OTHER", "carrier_name_other": "Lumen Freight"}
-        assert trackers[1]["carrier"] == "UPS" and "carrier_name_other" not in trackers[1]
+        posts = [r for r in seen if r.method == "POST" and r.url.path == "/v2/checkout/orders/ORD1/track"]
+        assert len(posts) == 2 and all("paypal-request-id" in r.headers for r in posts)
+        assert json.loads(posts[0].content) == {"capture_id": "CAP1", "tracking_number": "LF1", "carrier": "OTHER",
+                                                "carrier_name_other": "Lumen Freight", "notify_payer": False}
+        b = json.loads(posts[1].content)
+        assert b["carrier"] == "UPS" and "carrier_name_other" not in b
+        assert not any("trackers-batch" in r.url.path for r in seen)
+        try:
+            await pp.call("create_shipment_tracking", {"capture_id": "CAP2", "tracking_number": "X", "carrier": "UPS"})
+            raise AssertionError("expected PayPalError for a capture with no order")
+        except PayPalError as e:
+            assert e.status == 422
+    asyncio.run(go())
+
+
+def test_scripted_agent_sends_real_carrier_name_for_dispute_email():
+    from demo.agent import ScriptedAgent
+    from demo.inbox import BY_N, render_email
+    from warden.app import DEFAULT_MANDATE
+    from warden.gateway import Warden
+    from warden.ledger import Ledger
+    from warden.mandate import compile_mandate
+
+    sent = []
+
+    def evidence(req):
+        sent.append(_evidence_tracking(req))
+        return httpx.Response(200, json={"links": []})
+
+    async def go():
+        pp, _ = _client({
+            ("GET", "/v1/customer/disputes/PP-D-55210"): {"dispute_id": "PP-D-55210", "status": "WAITING_FOR_SELLER_RESPONSE",
+                                                         "dispute_amount": {"currency_code": "USD", "value": "64.00"}},
+            ("POST", "/v1/customer/disputes/PP-D-55210/provide-evidence"): evidence,
+        })
+        w = Warden(pp, Ledger(":memory:"))
+        w.set_mandate(await compile_mandate(DEFAULT_MANDATE))
+
+        async def fetcher(url):
+            return 200, "text/html", render_email(BY_N[6])
+        w.fetcher = fetcher
+        await ScriptedAgent(w).run(6)
+        assert len(sent) == 1
+        assert sent[0]["carrier_name"] == "OTHER" and sent[0]["carrier_name_other"] == "Lumen Freight"
+        assert sent[0]["tracking_number"] == "LF928374651US"
     asyncio.run(go())

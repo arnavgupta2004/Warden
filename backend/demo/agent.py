@@ -132,10 +132,11 @@ class ScriptedAgent:
         did = re.search(r"dispute\s+(PP-[A-Z0-9-]*\d)", text).group(1)
         await _tool(self.w, tr, session, "get_dispute", {"dispute_id": did})
         tracking = re.search(r"tracking number\s+(\w+)", text).group(1)
+        carrier = re.search(r"sent with ([A-Z][\w ]+?), tracking", text)
         notes = await draft_dispute_notes(text, tracking)
         tr.emit("thought", "The buyer says the item never arrived, but our records show it was delivered. Answering with proof of fulfillment.")
         await _tool(self.w, tr, session, "provide_dispute_evidence", {"dispute_id": did, "notes": notes, "tracking_number": tracking,
-                                                                      "carrier": "OTHER", "reason": "Item was delivered; provide tracking"})
+                                                                      "carrier": carrier.group(1) if carrier else "OTHER", "reason": "Item was delivered; provide tracking"})
         tr.emit("final", "Dispute answered.")
 
 
