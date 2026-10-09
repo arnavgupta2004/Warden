@@ -22,10 +22,10 @@ from warden.paypal import Simulator
 def fake_llm(monkeypatch):
     state = {"json": None, "text": "Short explanation."}
 
-    async def cj(system, user):
+    async def cj(system, user, **kw):
         return state["json"](system, user) if callable(state["json"]) else state["json"]
 
-    async def ct(system, user):
+    async def ct(system, user, **kw):
         return state["text"]
 
     for mod in (llm, mandate_mod.llm, policy_mod.llm):
@@ -86,24 +86,72 @@ def _use_gemini(monkeypatch):
 
 def test_gemini_complete_json_request_shape(monkeypatch):
     import httpx
+    import json as _json
     _use_gemini(monkeypatch)
+    monkeypatch.setattr(llm.settings, "llm_model", "gemini-2.5-flash")
     seen = []
 
     def handler(req):
         seen.append(req)
         return httpx.Response(200, json={"candidates": [{"content": {"role": "model", "parts": [
-            {"text": "thinking...", "thought": True}, {"text": '{"aligned": false, "confidence": 0.9}'}]}}]})
+            {"text": "thinking...", "thought": True}, {"text": '{"aligned": false, "confidence": 0.9, "concern": "x"}'}]}}]})
 
     monkeypatch.setattr(llm, "_http", httpx.AsyncClient(transport=httpx.MockTransport(handler)))
-    j = asyncio.run(llm.complete_json("Reviewer.", "Proposed action"))
-    assert j == {"aligned": False, "confidence": 0.9}
+    j = asyncio.run(llm.complete_json("Reviewer.", "Proposed action", schema=policy_mod.INTENT_SCHEMA))
+    assert j == {"aligned": False, "confidence": 0.9, "concern": "x"}
     req = seen[0]
-    assert req.url.path.endswith(f"/models/{llm.settings.llm_model}:generateContent")
+    assert req.url.path.endswith("/models/gemini-2.5-flash:generateContent")
     assert req.headers["x-goog-api-key"] == "test-key" and "key=" not in str(req.url)
-    import json as _json
-    body = _json.loads(req.content)
-    assert body["generationConfig"]["responseMimeType"] == "application/json"
-    assert body["contents"][0]["parts"][0]["text"] == "Proposed action"
+    cfg = _json.loads(req.content)["generationConfig"]
+    assert cfg["responseMimeType"] == "application/json"
+    assert cfg["responseJsonSchema"]["required"] == ["aligned", "confidence", "concern"]
+    assert cfg["thinkingConfig"] == {"thinkingBudget": 0}
+    assert _json.loads(req.content)["contents"][0]["parts"][0]["text"] == "Proposed action"
+
+    # Mandate compiling keeps the model's normal thinking (no thinkingConfig) and sends no schema.
+    asyncio.run(llm.complete_json("Compile.", "mandate text", quick=False))
+    cfg = _json.loads(seen[1].content)["generationConfig"]
+    assert "thinkingConfig" not in cfg and "responseJsonSchema" not in cfg and cfg["responseMimeType"] == "application/json"
+
+
+def test_quick_thinking_matches_model_family():
+    assert llm.quick_thinking("gemini-3.8-flash") == {"thinkingLevel": "MINIMAL"}
+    assert llm.quick_thinking("gemini-3-pro-preview") == {"thinkingLevel": "LOW"}
+    assert llm.quick_thinking("gemini-2.5-flash-lite") == {"thinkingBudget": 0}
+    assert llm.quick_thinking("gemini-2.5-pro") == {"thinkingBudget": 128}
+    assert llm.quick_thinking("gemini-2.0-flash") is None  # no thinking support: thinkingConfig would be an error
+
+
+def test_gemini_timeout_falls_back_to_deterministic_path(monkeypatch):
+    import time
+    import httpx
+
+    async def go():
+        m = await mandate_mod.compile_mandate(DEFAULT_MANDATE)  # compiled before Gemini is on
+        _use_gemini(monkeypatch)
+        monkeypatch.setattr(llm.settings, "llm_timeout_s", 0.2)
+
+        async def slow(req):
+            await asyncio.sleep(5)
+            return httpx.Response(200, json={})
+        monkeypatch.setattr(llm, "_http", httpx.AsyncClient(transport=httpx.MockTransport(slow)))
+
+        t0 = time.monotonic()
+        assert await llm.complete_json("x", "y", schema=policy_mod.INTENT_SCHEMA) is None
+        assert await llm.complete_text("x", "y") is None
+        assert time.monotonic() - t0 < 1.5
+
+        # Through Warden: the intent check and explanation time out, and the deterministic decision stands.
+        w = Warden(Simulator(), Ledger(":memory:"))
+        w.set_mandate(m)
+        t0 = time.monotonic()
+        r = await w.call_tool("s", m.agent_id, "create_refund", {"capture_id": "4RT88014HN112233K", "amount": 42},
+                              wait_for_approval=False)
+        assert time.monotonic() - t0 < 1.5
+        assert r["status"] == "executed"
+        e = w.ledger.all()[0]
+        assert e.verdict == Verdict.ALLOW and not any(f.rule == "intent_check" for f in e.findings)
+    asyncio.run(go())
 
 
 def test_gemini_agent_loop_routes_tools_through_warden(monkeypatch, fake_llm):
@@ -130,7 +178,7 @@ def test_gemini_agent_loop_routes_tools_through_warden(monkeypatch, fake_llm):
         ]
         bodies = []
 
-        async def fake_generate(body):
+        async def fake_generate(body, **kw):
             bodies.append(_json.loads(_json.dumps(body)))
             return script.pop(0)
         import json as _json

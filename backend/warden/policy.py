@@ -29,6 +29,15 @@ SEV_WEIGHT = {"info": 0, "low": 10, "medium": 30, "high": 60, "critical": 95}
 ORDER = {Verdict.ALLOW: 0, Verdict.STEP_UP: 1, Verdict.DENY: 2}
 WINDOW_S = {"day": 86400, "week": 7 * 86400, "month": 30 * 86400, "total": 10**10}
 MONEY_TOOLS = {n for n, t in TOOLS.items() if t.kind == "money_out"}
+INTENT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "aligned": {"type": "boolean"},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "concern": {"type": "string", "description": "One sentence."},
+    },
+    "required": ["aligned", "confidence", "concern"],
+}
 
 
 class FactsSource(Protocol):
@@ -281,7 +290,7 @@ class PolicyEngine:
         )
         j = await llm.complete_json(
             "You are a payments risk reviewer. Output JSON {\"aligned\": bool, \"confidence\": number 0-1, \"concern\": string (one sentence)}.",
-            prompt)
+            prompt, schema=INTENT_SCHEMA)
         if not isinstance(j, dict):
             return None
         if not j.get("aligned", True) and float(j.get("confidence", 0)) >= 0.7:

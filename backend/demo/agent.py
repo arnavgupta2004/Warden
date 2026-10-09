@@ -183,7 +183,8 @@ class GeminiAgent:
         tools = gemini_tools()
         for _ in range(12):
             try:
-                resp = await llm.gemini_generate({"systemInstruction": {"parts": [{"text": SYSTEM}]}, "contents": contents, "tools": tools})
+                resp = await llm.gemini_generate({"systemInstruction": {"parts": [{"text": SYSTEM}]}, "contents": contents, "tools": tools},
+                                                 timeout=llm.SLOW_TIMEOUT_S)
             except Exception as exc:
                 tr.emit("final", f"Gemini request failed: {exc}")
                 return tr.lines

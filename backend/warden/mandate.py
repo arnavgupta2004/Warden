@@ -124,7 +124,7 @@ async def compile_mandate(text: str, agent_id: str = "backoffice-agent") -> Mand
     compiled_by = "rules"
 
     if llm.enabled():
-        j = await llm.complete_json(LLM_SYSTEM, text)
+        j = await llm.complete_json(LLM_SYSTEM, text, quick=False)
         if isinstance(j, dict):
             compiled_by = "llm+rules"
             caps = [c for c in j.get("capabilities", []) if c in CAPABILITIES]
