@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: warden
+    runtime: docker
+    plan: free
+    healthCheckPath: /healthz
+    envVars:
+      - key: WARDEN_PUBLIC_URL
+        sync: false
+      - key: PAYPAL_CLIENT_ID
+        sync: false
+      - key: PAYPAL_CLIENT_SECRET
+        sync: false
+      - key: PAYPAL_WEBHOOK_ID
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: WARDEN_SIGNING_KEY
+        generateValue: true
+      - key: WARDEN_NTFY_TOPIC
+        sync: false

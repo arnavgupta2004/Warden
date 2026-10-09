@@ -1,0 +1,14 @@
+node_modules/
+backend/static/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.db
+*.db-wal
+*.db-shm
+.env
+backend/sandbox_seed.json
+dist/
+.DS_Store
+.venv/
+*.tsbuildinfo
