@@ -32,8 +32,8 @@ function Dashboard() {
       <Header status={live.status} connected={live.connected} onReset={reset} />
       <main className="layout">
         <aside className="col-left">
-          <MandatePanel mandate={live.mandate} spent={live.spent} />
-          <InboxPanel emails={emails} agent={agent} setAgent={setAgent} llm={!!live.status?.llm} />
+          <MandatePanel mandate={live.mandate} spent={live.spent} aiLabel={live.status?.llm_label ?? null} />
+          <InboxPanel emails={emails} agent={agent} setAgent={setAgent} aiLabel={live.status?.llm_label ?? null} />
         </aside>
         <section className="col-main">
           <LedgerGrid rows={live.ledger} selectedId={selectedId} onSelect={(e) => setSelectedId(e.id)} />

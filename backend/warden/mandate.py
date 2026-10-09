@@ -1,6 +1,6 @@
 """Mandate compiler: natural language -> structured, signed spending policy.
 
-Claude does the compiling when an API key is set. A deterministic parser
+The model (Claude or Gemini) does the compiling when an API key is set. A deterministic parser
 handles the common phrasings so Warden works offline and so the LLM output
 can be cross-checked: the stricter of the two wins on every numeric limit.
 """

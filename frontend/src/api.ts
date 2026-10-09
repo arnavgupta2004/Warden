@@ -67,6 +67,7 @@ export interface Approval {
 export interface Status {
   paypal_mode: string;
   llm: boolean;
+  llm_label: string | null;
   llm_model: string | null;
   chain: { ok: boolean; records: number; tip?: string };
   pending_approvals: number;

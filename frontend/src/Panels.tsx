@@ -17,8 +17,8 @@ export function Header({ status, connected, onReset }: { status: Status | null; 
       </div>
       <div className="chips">
         <span className={`chip ${status?.paypal_mode === "sandbox" ? "chip-ok" : ""}`} title="Where payments are sent">{mode}</span>
-        <span className={`chip ${status?.llm ? "chip-ok" : ""}`} title={status?.llm_model ?? "Set ANTHROPIC_API_KEY to enable"}>
-          {status?.llm ? "Claude on" : "Claude off"}
+        <span className={`chip ${status?.llm ? "chip-ok" : ""}`} title={status?.llm_model ?? "Set GEMINI_API_KEY or ANTHROPIC_API_KEY to enable"}>
+          {status?.llm ? `${status.llm_label} on` : "AI off"}
         </span>
         <span className={`chip ${status?.chain.ok ? "chip-ok" : "chip-bad"}`} title={status?.chain.tip ?? ""}>
           {status ? (status.chain.ok ? `Ledger intact, ${status.chain.records} records` : "Ledger tampered") : "Ledger"}
@@ -30,7 +30,7 @@ export function Header({ status, connected, onReset }: { status: Status | null; 
   );
 }
 
-export function MandatePanel({ mandate, spent }: { mandate: Mandate | null; spent: number }) {
+export function MandatePanel({ mandate, spent, aiLabel }: { mandate: Mandate | null; spent: number; aiLabel: string | null }) {
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -96,7 +96,7 @@ export function MandatePanel({ mandate, spent }: { mandate: Mandate | null; spen
         ))}
       </div>
       <p className="sig" title={mandate.signature}>
-        Compiled by {mandate.compiled_by === "rules" ? "Warden's parser" : "Claude, checked by Warden's parser"}. Signed {mandate.signature.slice(0, 10)}.
+        Compiled by {mandate.compiled_by === "rules" ? "Warden's parser" : `${aiLabel ?? "The model"}, checked by Warden's parser`}. Signed {mandate.signature.slice(0, 10)}.
       </p>
     </section>
   );
@@ -111,7 +111,7 @@ const SCENARIO_HINT: Record<string, string> = {
   dispute: "Routine",
 };
 
-export function InboxPanel({ emails, agent, setAgent, llm }: { emails: DemoEmail[]; agent: string; setAgent: (a: string) => void; llm: boolean }) {
+export function InboxPanel({ emails, agent, setAgent, aiLabel }: { emails: DemoEmail[]; agent: string; setAgent: (a: string) => void; aiLabel: string | null }) {
   const [running, setRunning] = useState<number | null>(null);
   const run = async (n: number) => {
     setRunning(n);
@@ -127,7 +127,7 @@ export function InboxPanel({ emails, agent, setAgent, llm }: { emails: DemoEmail
         <h3>Kestrel &amp; Co. inbox</h3>
         <div className="seg small" role="group" aria-label="Which agent works the inbox">
           <button className={agent === "scripted" ? "on" : ""} onClick={() => setAgent("scripted")} title="Deterministic agent that obeys whatever it reads">Gullible agent</button>
-          <button className={agent === "claude" ? "on" : ""} onClick={() => setAgent("claude")} disabled={!llm} title={llm ? "Live Claude tool-use agent" : "Needs ANTHROPIC_API_KEY"}>Claude agent</button>
+          <button className={agent === "ai" ? "on" : ""} onClick={() => setAgent("ai")} disabled={!aiLabel} title={aiLabel ? `Live ${aiLabel} tool-use agent` : "Needs GEMINI_API_KEY or ANTHROPIC_API_KEY"}>{aiLabel ?? "AI"} agent</button>
         </div>
       </div>
       <p className="muted small-print">A fictional shop. Hand an email to the agent and watch what reaches PayPal.</p>

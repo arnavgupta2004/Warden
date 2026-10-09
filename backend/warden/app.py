@@ -97,6 +97,7 @@ def build_app(warden: Warden | None = None) -> FastAPI:
         return {
             "paypal_mode": getattr(warden.backend, "mode", "unknown"),
             "llm": llm.enabled(),
+            "llm_label": llm.label() if llm.enabled() else None,
             "llm_model": settings.llm_model if llm.enabled() else None,
             "chain": warden.ledger.verify(),
             "mandate_id": m.id if m else None,

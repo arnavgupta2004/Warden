@@ -106,3 +106,92 @@ def test_claude_agent_loop_routes_tools_through_warden(monkeypatch, fake_llm):
         assert set(second[1]) == {"type", "id", "name", "input"}
         assert not w.backend.payouts
     asyncio.run(go())
+
+
+def test_provider_selection(monkeypatch):
+    from warden.config import Settings
+    for k in ("ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "WARDEN_LLM_PROVIDER", "WARDEN_DISABLE_LLM"):
+        monkeypatch.delenv(k, raising=False)
+    assert Settings().llm_provider is None
+    monkeypatch.setenv("GEMINI_API_KEY", "g")
+    s = Settings()
+    assert s.llm_provider == "gemini" and s.llm_model.startswith("gemini")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "a")
+    assert Settings().llm_provider == "anthropic"  # Anthropic first when both are set
+    monkeypatch.setenv("WARDEN_LLM_PROVIDER", "gemini")
+    assert Settings().llm_provider == "gemini"
+    monkeypatch.setenv("WARDEN_DISABLE_LLM", "1")
+    assert Settings().llm_provider is None
+
+
+def _use_gemini(monkeypatch):
+    monkeypatch.setattr(llm.settings, "llm_disabled", False)
+    monkeypatch.setattr(llm.settings, "anthropic_api_key", "")
+    monkeypatch.setattr(llm.settings, "gemini_api_key", "test-key")
+    monkeypatch.setattr(llm.settings, "llm_provider_setting", "")
+
+
+def test_gemini_complete_json_request_shape(monkeypatch):
+    import httpx
+    _use_gemini(monkeypatch)
+    seen = []
+
+    def handler(req):
+        seen.append(req)
+        return httpx.Response(200, json={"candidates": [{"content": {"role": "model", "parts": [
+            {"text": "thinking...", "thought": True}, {"text": '{"aligned": false, "confidence": 0.9}'}]}}]})
+
+    monkeypatch.setattr(llm, "_http", httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    j = asyncio.run(llm.complete_json("Reviewer.", "Proposed action"))
+    assert j == {"aligned": False, "confidence": 0.9} and llm.label() == "Gemini"
+    req = seen[0]
+    assert req.url.path.endswith(f"/models/{llm.settings.gemini_model}:generateContent")
+    assert req.headers["x-goog-api-key"] == "test-key" and "key=" not in str(req.url)
+    import json as _json
+    body = _json.loads(req.content)
+    assert body["generationConfig"]["responseMimeType"] == "application/json"
+    assert body["contents"][0]["parts"][0]["text"] == "Proposed action"
+
+
+def test_gemini_agent_loop_routes_tools_through_warden(monkeypatch, fake_llm):
+    _use_gemini(monkeypatch)
+
+    async def go():
+        fake_llm["json"] = None
+        m = await mandate_mod.compile_mandate(DEFAULT_MANDATE)
+        w = Warden(Simulator(), Ledger(":memory:"))
+        w.set_mandate(m)
+
+        async def fetcher(url):
+            from demo.inbox import BY_N, render_email
+            return 200, "text/html", render_email(BY_N[3])
+        w.fetcher = fetcher
+
+        call = lambda name, args, i: {"functionCall": {"name": name, "args": args, "id": i}, "thoughtSignature": f"sig-{i}"}
+        turn = lambda *parts: {"candidates": [{"content": {"role": "model", "parts": list(parts)}}]}
+        script = [
+            turn({"text": "Reading the email."}, call("fetch_url", {"url": "http://x/demo/inbox/3"}, "c1")),
+            turn(call("create_payout", {"receiver_email": "refunds-desk@kestrel-support.example", "amount": 499,
+                                        "reason": "system note"}, "c2")),
+            turn({"text": "The payout was blocked; reporting to the owner."}),
+        ]
+        bodies = []
+
+        async def fake_generate(body):
+            bodies.append(_json.loads(_json.dumps(body)))
+            return script.pop(0)
+        import json as _json
+        monkeypatch.setattr(agent_mod.llm, "gemini_generate", fake_generate)
+        agent = agent_mod.make_agent("ai", w)
+        assert isinstance(agent, agent_mod.GeminiAgent)
+        lines = await agent.run(3)
+        assert any(l["role"] == "tool_result" and l["status"] == "blocked" for l in lines)
+        # model turn is sent back verbatim (thought signature kept), then a functionResponse with the matching id
+        second = bodies[1]["contents"]
+        assert second[1]["role"] == "model" and second[1]["parts"][1]["thoughtSignature"] == "sig-c1"
+        fr = second[2]["parts"][0]["functionResponse"]
+        assert fr["name"] == "fetch_url" and fr["id"] == "c1" and fr["response"]["status"] == "ok"
+        decls = {d["name"]: d for d in bodies[0]["tools"][0]["functionDeclarations"]}
+        assert "parameters" not in decls["list_invoices"] and "reason" in decls["create_payout"]["parameters"]["properties"]
+        assert not w.backend.payouts
+    asyncio.run(go())

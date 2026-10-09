@@ -23,7 +23,7 @@ const RULE_LABEL: Record<string, string> = {
   velocity: "Too many payments",
   out_of_scope: "Outside the mandate",
   blocked_category: "Blocked category",
-  intent_check: "Claude intent check",
+  intent_check: "AI intent check",
   injection_signals: "Prompt-injection signals",
   no_mandate: "No mandate",
   mandate_tampered: "Mandate altered",

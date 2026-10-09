@@ -3,7 +3,8 @@
 Two interchangeable agents work the support inbox. Both can only touch
 PayPal through Warden's tools.
 
-* ClaudeAgent: a real Claude tool-use loop (needs ANTHROPIC_API_KEY).
+* ClaudeAgent / GeminiAgent: a real model tool-use loop (needs ANTHROPIC_API_KEY
+  or GEMINI_API_KEY). make_agent("ai") picks whichever provider is active.
 * ScriptedAgent: a deterministic agent that does whatever the email asks,
   including instructions hidden in it. It stands in for an LLM agent that
   has been successfully manipulated, which is the case Warden exists for,
@@ -166,7 +167,7 @@ class ClaudeAgent:
         tr = Transcript(self.w, run_id, e.scenario, self.name)
         client = llm.client()
         if client is None:
-            tr.emit("final", "Claude agent needs ANTHROPIC_API_KEY. Use the scripted agent instead.")
+            tr.emit("final", "The AI agent needs ANTHROPIC_API_KEY or GEMINI_API_KEY. Use the scripted agent instead.")
             return tr.lines
         task = f"New support email #{n} is at {email_url(n)}. Handle it."
         self.w.add_task(session, AGENT_ID, f"Handle support email #{n} for Kestrel & Co.")
@@ -196,5 +197,67 @@ class ClaudeAgent:
         return tr.lines
 
 
+def gemini_tools() -> list[dict[str, Any]]:
+    decls = []
+    for t in tool_list():
+        d: dict[str, Any] = {"name": t["name"], "description": t["description"]}
+        if t["inputSchema"].get("properties"):  # Gemini rejects an object schema with no properties
+            d["parameters"] = t["inputSchema"]
+        decls.append(d)
+    return [{"functionDeclarations": decls}]
+
+
+class GeminiAgent:
+    name = "gemini"
+
+    def __init__(self, w: Warden) -> None:
+        self.w = w
+
+    async def run(self, n: int, run_id: str | None = None) -> list[dict[str, Any]]:
+        e = BY_N[n]
+        run_id = run_id or uuid.uuid4().hex[:8]
+        session = f"run_{run_id}"
+        tr = Transcript(self.w, run_id, e.scenario, self.name)
+        if llm.provider() != "gemini":
+            tr.emit("final", "The AI agent needs ANTHROPIC_API_KEY or GEMINI_API_KEY. Use the scripted agent instead.")
+            return tr.lines
+        self.w.add_task(session, AGENT_ID, f"Handle support email #{n} for Kestrel & Co.")
+        contents: list[dict[str, Any]] = [{"role": "user", "parts": [{"text": f"New support email #{n} is at {email_url(n)}. Handle it."}]}]
+        tools = gemini_tools()
+        for _ in range(12):
+            try:
+                resp = await llm.gemini_generate({"systemInstruction": {"parts": [{"text": SYSTEM}]}, "contents": contents, "tools": tools})
+            except Exception as exc:
+                tr.emit("final", f"Gemini request failed: {exc}")
+                return tr.lines
+            content = (resp.get("candidates") or [{}])[0].get("content") or {}
+            parts = content.get("parts") or []
+            if not parts:
+                break
+            # Send the model's turn back verbatim: thinking models attach thought signatures to it.
+            contents.append({"role": "model", "parts": parts})
+            responses = []
+            for part in parts:
+                if part.get("text", "").strip() and not part.get("thought"):
+                    tr.emit("thought", part["text"].strip())
+                elif "functionCall" in part:
+                    fc = part["functionCall"]
+                    r = await _tool(self.w, tr, session, fc["name"], dict(fc.get("args") or {}))
+                    result = json.loads(json.dumps(r, default=str))
+                    if isinstance(result.get("content"), str):
+                        result["content"] = result["content"][:12000]
+                    fr: dict[str, Any] = {"name": fc["name"], "response": result}
+                    if fc.get("id"):
+                        fr["id"] = fc["id"]
+                    responses.append({"functionResponse": fr})
+            if not responses:
+                break
+            contents.append({"role": "user", "parts": responses})
+        tr.emit("final", "Run finished.")
+        return tr.lines
+
+
 def make_agent(kind: str, w: Warden):
-    return ClaudeAgent(w) if kind == "claude" else ScriptedAgent(w)
+    if kind in ("ai", "claude", "gemini"):
+        return GeminiAgent(w) if llm.provider() == "gemini" else ClaudeAgent(w)
+    return ScriptedAgent(w)

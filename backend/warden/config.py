@@ -44,7 +44,11 @@ class Settings:
     paypal_mode: str = field(default_factory=lambda: os.getenv("WARDEN_PAYPAL_MODE", ""))
 
     anthropic_api_key: str = field(default_factory=lambda: os.getenv("ANTHROPIC_API_KEY", ""))
-    llm_model: str = field(default_factory=lambda: os.getenv("WARDEN_LLM_MODEL", "claude-sonnet-5-5"))
+    claude_model: str = field(default_factory=lambda: os.getenv("WARDEN_LLM_MODEL", "claude-sonnet-5-5"))
+    gemini_api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY", ""))
+    gemini_model: str = field(default_factory=lambda: os.getenv("WARDEN_GEMINI_MODEL", "gemini-2.5-flash"))
+    # "anthropic" or "gemini"; empty picks whichever has a key (Anthropic first).
+    llm_provider_setting: str = field(default_factory=lambda: os.getenv("WARDEN_LLM_PROVIDER", "").strip().lower())
     llm_disabled: bool = field(default_factory=lambda: _bool("WARDEN_DISABLE_LLM"))
 
     signing_key: str = field(
@@ -70,8 +74,21 @@ class Settings:
         return bool(self.paypal_client_id and self.paypal_client_secret)
 
     @property
+    def llm_provider(self) -> str | None:
+        if self.llm_disabled:
+            return None
+        keys = {"anthropic": self.anthropic_api_key, "gemini": self.gemini_api_key}
+        if self.llm_provider_setting:
+            return self.llm_provider_setting if keys.get(self.llm_provider_setting) else None
+        return next((name for name, key in keys.items() if key), None)
+
+    @property
+    def llm_model(self) -> str:
+        return self.gemini_model if self.llm_provider == "gemini" else self.claude_model
+
+    @property
     def llm_enabled(self) -> bool:
-        return bool(self.anthropic_api_key) and not self.llm_disabled
+        return self.llm_provider is not None
 
 
 settings = Settings()
