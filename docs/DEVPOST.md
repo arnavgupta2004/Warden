@@ -8,7 +8,7 @@
 PayPal's Agent Toolkit and MCP server make it possible for an AI agent to run a small business's payments. That's exactly the work owners want to hand off. But the agent reads customer emails, supplier invoices and web pages all day, and any of that text can try to give it orders. Payment-redirect scams (business email compromise) already cost US businesses about $3.05B in 2025 according to the FBI's IC3, and prompt injection is the top risk on OWASP's LLM list. We wanted a way to say yes to agents without giving them a blank cheque.
 
 ## What it does
-Warden sits between any AI agent and PayPal and exposes the same PayPal tools over MCP and REST. The owner writes a mandate in plain English ("refund up to $50 on your own, pay Maya up to $400, never pay anyone new without asking"). Every tool call is then checked against five layers:
+Warden sits between any AI agent and PayPal and exposes the same PayPal tools over MCP and REST. The owner writes a mandate in plain English ("refund up to $50 on your own, pay Maya up to $400, never pay anyone new without asking, no single payment over $500"). Every tool call is then checked against five layers:
 1. **The signed mandate:** scope, caps, budget, trusted payees, velocity.
 2. **Live PayPal facts:** does the capture exist, how much is still refundable, is it disputed?
 3. **Provenance:** where did this payee or id first appear? Content the agent reads is tracked as untrusted. Hidden text and instruction-like phrases quarantine the session, and lookalike payees are caught.

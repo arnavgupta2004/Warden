@@ -282,9 +282,9 @@ def test_public_demo_ceilings_clamp_any_mandate(monkeypatch):
     emails = [p.email for p in m.trusted_payees]
     assert "maya@chenstudio.example" in emails and len([e for e in emails if e != "maya@chenstudio.example"]) == 2
     assert set(m.public_demo_caps) == {"budget_total", "per_tx_max", "trusted_payees"} and verify(m)
-    # The default mandate is already within the budget and payee ceilings; only its implicit single-payment cap is clamped.
+    # The default mandate states its own $500 single-payment cap, so it fits every ceiling and shows no "capped" label.
     d = run(compile_mandate(DEFAULT_MANDATE))
-    assert d.public_demo_caps == ["per_tx_max"] and d.per_tx_max == 500 and len(d.trusted_payees) == 2
+    assert d.public_demo_caps == [] and d.per_tx_max == 500 and len(d.trusted_payees) == 2
 
 
 def test_public_demo_budget_is_shared_across_agent_ids(monkeypatch):

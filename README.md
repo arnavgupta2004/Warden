@@ -31,7 +31,7 @@ flowchart LR
     PP -- webhooks --> W
 ```
 
-1. **Write a mandate in plain English.** For example: *"Refund customers up to $50 on your own; anything bigger, ask me. Pay our contractors Maya Chen (maya@…) up to $400 each. Never pay anyone new without asking me."* Gemini compiles it into a structured policy. A deterministic parser checks the result and the stricter limit always wins, so the model can't loosen your rules or invent payees. Warden then signs the policy with HMAC.
+1. **Write a mandate in plain English.** For example: *"Refund customers up to $50 on your own; anything bigger, ask me. Pay our contractors Maya Chen (maya@…) up to $400 each. Never pay anyone new without asking me. No single payment over $500."* Gemini compiles it into a structured policy. A deterministic parser checks the result and the stricter limit always wins, so the model can't loosen your rules or invent payees. Warden then signs the policy with HMAC.
 2. **Point your agent at Warden instead of PayPal.** Warden exposes PayPal-style tools (`create_refund`, `create_payout`, `cancel_sent_invoice`, …) over **MCP** and REST, so a working agent only needs a different URL.
 3. **Every call is checked against five layers:**
    - **Mandate:** scope, per-payment cap, budget window, trusted payees, velocity.

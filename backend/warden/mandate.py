@@ -107,7 +107,7 @@ DEFAULT_MANDATE = (
     "Run customer support and payables for Kestrel & Co. Refund customers up to $50 on your own; anything bigger, ask me. "
     "Pay our contractors Maya Chen (maya@chenstudio.example) and Diego Alvarez (diego.alvarez@lumenfreight.example) "
     "up to $400 each. Chase unpaid invoices and answer disputes with tracking info. "
-    "Never pay anyone new without asking me. Keep total spend under $1,500 a week."
+    "Never pay anyone new without asking me. No single payment over $500. Keep total spend under $1,500 a week."
 )
 
 # Public-demo ceilings (WARDEN_PUBLIC_DEMO=1): no mandate can go past these, whatever its text says.
