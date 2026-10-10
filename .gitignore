@@ -14,3 +14,4 @@ dist/
 *.tsbuildinfo
 backend/llm_cache.json
 backend/llm_cache.tmp
+backend/llm_usage.json

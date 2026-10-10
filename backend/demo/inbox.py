@@ -29,6 +29,45 @@ def sandbox_ids() -> dict[str, str]:
     return out
 
 
+# Refund scenarios whose captures Reset demo replaces in sandbox mode (refunds can't be undone):
+# simulator capture id, simulator order id, amount, description. The planter (dispute) is not here.
+REFUND_SEEDS = [
+    ("4RT88014HN112233K", "7XK21934UB556120D", "42.00", "Stoneware mug set (4)"),
+    ("9LM20577QW341870P", "2HB90321KE118845M", "180.00", "Walnut desk lamp"),
+    ("1VC66309TR775024A", "5NF44208GX903317J", "220.00", "Linen throw + cushions"),
+]
+
+
+def _read_seed() -> dict:
+    try:
+        data = json.loads(SEED_FILE.read_text())
+    except (OSError, ValueError):
+        data = {}
+    for group in ("orders", "captures", "invoices", "disputes"):
+        data.setdefault(group, {})
+    return data
+
+
+def has_refund_captures() -> bool:
+    caps = _read_seed()["captures"]
+    return all(sim_cap in caps for sim_cap, *_ in REFUND_SEEDS)
+
+
+async def refresh_refund_captures(backend) -> dict[str, str]:
+    """Give each refund scenario a fresh sandbox capture paid with a test card, and point
+    the inbox at it. Returns {simulator capture id: new capture id}."""
+    data = _read_seed()
+    fresh: dict[str, str] = {}
+    for sim_cap, sim_order, amount, desc in REFUND_SEEDS:
+        order_id, cap_id = await backend.create_card_capture(amount, desc, reference_id=sim_order)
+        data["orders"][sim_order] = order_id
+        data["captures"][sim_cap] = cap_id
+        fresh[sim_cap] = cap_id
+    SEED_FILE.write_text(json.dumps(data, indent=2))
+    sandbox_ids.cache_clear()
+    return fresh
+
+
 def localize(text: str) -> str:
     for sim, real in sandbox_ids().items():
         text = text.replace(sim, real)

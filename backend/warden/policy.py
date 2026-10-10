@@ -256,8 +256,9 @@ class PolicyEngine:
                 out.append(_f("cover_tracks", "high", Verdict.STEP_UP,
                               f"Cancelling records right after moving money ({moved[-1].tool} {_usd(moved[-1].money)}) is how fraud hides its trail.",
                               prior=moved[-1].id))
-        if kind == "money_out" and cp:
-            # Refunds are grouped per original payment; payouts per recipient.
+        # Refunds are grouped per original payment, so they don't need a known payer
+        # (card payments have no PayPal email); payouts are grouped per recipient.
+        if kind == "money_out" and (cp or call.tool == "create_refund"):
             same = (lambda e: e.args.get("capture_id") == call.args.get("capture_id")) if call.tool == "create_refund" \
                 else (lambda e: e.counterparty == cp)
             day = [e for e in self.ledger.recent(call.agent_id, now - 86400)

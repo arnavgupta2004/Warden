@@ -107,6 +107,8 @@ class PayPalSandbox:
             try:
                 o = await self._req("GET", f"/v2/checkout/orders/{order_id}")
                 payer_email = o.get("payer", {}).get("email_address", "")
+                if not payer_email and (card := o.get("payment_source", {}).get("card")):
+                    payer_email = f"card ending {card.get('last_digits', '')}".strip()
                 refunded = _refunded_from_order(o, capture_id)
             except PayPalError:
                 pass
@@ -140,6 +142,31 @@ class PayPalSandbox:
         tx = (d.get("disputed_transactions") or [{}])[0]
         buyer = tx.get("buyer", {}).get("email", "") or tx.get("buyer", {}).get("name", "")
         return {"dispute_id": dispute_id, "amount": float(d["dispute_amount"]["value"]), "status": d.get("status"), "buyer_email": buyer}
+
+    async def create_card_capture(self, amount: str, description: str, reference_id: str,
+                                  card_number: str = "4012888888881881") -> tuple[str, str]:
+        """Create and capture an order paid with a PayPal sandbox test card (no buyer login).
+        Used by Reset demo to give the refund scenarios fresh, refundable captures.
+        Returns (order_id, capture_id). Sandbox only: raw card data needs PCI SAQ D in live."""
+        if "sandbox" not in self.base:
+            raise PayPalError(400, "SANDBOX_ONLY", "Test-card captures are only for the PayPal sandbox.")
+        body = {
+            "intent": "CAPTURE",
+            "purchase_units": [{"reference_id": reference_id, "description": description,
+                                "amount": {"currency_code": "USD", "value": amount}}],
+            "payment_source": {"card": {
+                "number": card_number, "expiry": f"{datetime.now().year + 3}-12", "security_code": "123",
+                "name": "Kestrel Demo Buyer",
+                "billing_address": {"address_line_1": "1 Demo Way", "admin_area_2": "San Jose", "admin_area_1": "CA",
+                                    "postal_code": "95131", "country_code": "US"}}},
+        }
+        o = await self._req("POST", "/v2/checkout/orders", body, idempotent=True)
+        if o.get("status") != "COMPLETED":  # card orders usually capture on create; capture if not
+            o = await self._req("POST", f"/v2/checkout/orders/{o['id']}/capture", idempotent=True)
+        cap = o["purchase_units"][0]["payments"]["captures"][0]
+        if cap.get("status") not in ("COMPLETED", "PENDING"):
+            raise PayPalError(422, "CAPTURE_NOT_COMPLETED", f"Test-card capture is {cap.get('status')}.")
+        return o["id"], cap["id"]
 
     # -- tools ----------------------------------------------------------
     async def call(self, tool: str, args: dict[str, Any]) -> dict[str, Any]:

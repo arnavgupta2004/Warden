@@ -28,6 +28,8 @@ from .paypal import make_backend
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
+log = logging.getLogger("warden.app")
+
 DEFAULT_MANDATE = (
     "Run customer support and payables for Kestrel & Co. Refund customers up to $50 on your own; anything bigger, ask me. "
     "Pay our contractors Maya Chen (maya@chenstudio.example) and Diego Alvarez (diego.alvarez@lumenfreight.example) "
@@ -101,11 +103,24 @@ class RunIn(BaseModel):
 STATIC = Path(__file__).resolve().parent.parent / "static"
 
 
+async def _ensure_sandbox_captures(warden: Warden) -> None:
+    """On a fresh sandbox deployment (no seed file), create the refund scenarios' captures once."""
+    from demo.inbox import has_refund_captures, refresh_refund_captures
+    if getattr(warden.backend, "mode", "") != "sandbox" or has_refund_captures():
+        return
+    try:
+        await refresh_refund_captures(warden.backend)
+        log.info("Created fresh sandbox captures for the refund scenarios.")
+    except Exception as exc:  # the dashboard still works; refunds will show as unknown captures
+        log.warning("Could not create sandbox captures: %s", exc)
+
+
 def build_app(warden: Warden | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         if not app.state.warden.mandates:
             app.state.warden.set_mandate(await compile_mandate(DEFAULT_MANDATE))
+        await _ensure_sandbox_captures(app.state.warden)
         yield
 
     app = FastAPI(title="Warden", version="1.0.0", lifespan=lifespan)
@@ -136,6 +151,7 @@ def build_app(warden: Warden | None = None) -> FastAPI:
     app.state.run_limiters = [RateLimiter(10), RateLimiter(200, 86400)]
     app.state.gemini_run_limiters = [RateLimiter(2), RateLimiter(15, 86400)]
     app.state.mandate_limiters = [RateLimiter(3), RateLimiter(20, 86400)]
+    app.state.reset_limiters = [RateLimiter(3)]  # each sandbox reset creates three PayPal orders
     app.include_router(mcp_router)
 
     # ------------------------------------------------------------- status
@@ -146,6 +162,8 @@ def build_app(warden: Warden | None = None) -> FastAPI:
             "paypal_mode": getattr(warden.backend, "mode", "unknown"),
             "llm": llm.enabled(),
             "llm_limited": llm.enabled() and llm.limited(),
+            "llm_capped": llm.enabled() and llm.capped(),
+            "llm_calls_today": llm.calls_today(),
             "llm_quota": llm.quota_info() or None,
             "llm_model": settings.llm_model if llm.enabled() else None,
             "chain": warden.ledger.verify(),
@@ -243,11 +261,20 @@ def build_app(warden: Warden | None = None) -> FastAPI:
         return {"run_id": run_id, "agent": agent.name}
 
     @app.post("/api/reset")
-    async def reset() -> dict[str, Any]:
+    async def reset(request: Request) -> dict[str, Any]:
+        _limit(app.state.reset_limiters, request, "resets")
         warden.reset()
         if "backoffice-agent" in warden.mandates:
             warden.set_mandate(warden.mandates["backoffice-agent"])
-        return {"ok": True}
+        out: dict[str, Any] = {"ok": True}
+        if getattr(warden.backend, "mode", "") == "sandbox":
+            # Refunds can't be undone on PayPal, so each reset gets fresh captures for the refund emails.
+            from demo.inbox import refresh_refund_captures
+            try:
+                out["fresh_captures"] = await refresh_refund_captures(warden.backend)
+            except Exception as exc:
+                out["fresh_captures_error"] = str(exc)
+        return out
 
     @app.get("/demo/inbox", response_class=HTMLResponse)
     async def inbox() -> str:

@@ -209,3 +209,90 @@ def test_scripted_agent_sends_real_carrier_name_for_dispute_email():
         assert sent[0]["carrier_name"] == "OTHER" and sent[0]["carrier_name_other"] == "Lumen Freight"
         assert sent[0]["tracking_number"] == "LF928374651US"
     asyncio.run(go())
+
+
+
+def _card_order(order_id, cap_id, status="COMPLETED"):
+    pu = {"reference_id": "r", "payments": {"captures": [{"id": cap_id, "status": "COMPLETED"}]}} if status == "COMPLETED" else {"reference_id": "r"}
+    return {"id": order_id, "status": status, "purchase_units": [pu]}
+
+
+def test_create_card_capture_request_shape():
+    def create(req):
+        b = json.loads(req.content)
+        card = b["payment_source"]["card"]
+        assert b["intent"] == "CAPTURE" and b["purchase_units"][0]["amount"] == {"currency_code": "USD", "value": "42.00"}
+        assert card["number"] == "4012888888881881" and len(card["expiry"]) == 7 and card["expiry"][4] == "-"
+        assert card["billing_address"]["country_code"] == "US" and "paypal-request-id" in req.headers
+        return httpx.Response(201, json=_card_order("ORDC", "CAPC"))
+
+    async def go():
+        pp, seen = _client({("POST", "/v2/checkout/orders"): create})
+        assert await pp.create_card_capture("42.00", "Mug", "7XK") == ("ORDC", "CAPC")
+        assert not any(r.url.path.endswith("/capture") for r in seen)  # captured on create: no second call
+
+        # Some accounts return APPROVED; then Warden captures explicitly.
+        pp, seen = _client({("POST", "/v2/checkout/orders"): _card_order("ORDA", "", "APPROVED"),
+                            ("POST", "/v2/checkout/orders/ORDA/capture"): _card_order("ORDA", "CAPA")})
+        assert await pp.create_card_capture("1.00", "x", "y") == ("ORDA", "CAPA")
+
+        live = PayPalSandbox("cid", "secret", "https://api-m.paypal.com")
+        try:
+            await live.create_card_capture("1.00", "x", "y")
+            raise AssertionError("must refuse outside the sandbox")
+        except PayPalError as e:
+            assert e.name == "SANDBOX_ONLY"
+    asyncio.run(go())
+
+
+def test_card_payer_shows_as_card_ending():
+    routes = {
+        ("GET", "/v2/payments/captures/CAPC"): {"id": "CAPC", "status": "COMPLETED", "amount": {"currency_code": "USD", "value": "42.00"},
+                                               "supplementary_data": {"related_ids": {"order_id": "ORDC"}}},
+        ("GET", "/v2/checkout/orders/ORDC"): {"id": "ORDC", "payment_source": {"card": {"last_digits": "1881", "brand": "VISA"}}},
+        ("GET", "/v1/customer/disputes"): {"items": []},
+    }
+
+    async def go():
+        pp, _ = _client(routes)
+        assert (await pp.capture_facts("CAPC"))["payer_email"] == "card ending 1881"
+    asyncio.run(go())
+
+
+def test_reset_gives_refund_scenarios_fresh_captures(tmp_path, monkeypatch):
+    from demo import inbox
+    from warden.app import build_app
+    from warden.config import settings
+    from warden.gateway import Warden
+    from warden.ledger import Ledger
+
+    seed = tmp_path / "sandbox_seed.json"
+    seed.write_text(json.dumps({"orders": {"8QT75510MC227094R": "PLANTER_ORDER"}, "captures": {"6DW31852LP480916E": "PLANTER_CAP"},
+                                "invoices": {}, "disputes": {"PP-D-55210": "PP-D-REAL"}}))
+    monkeypatch.setattr(inbox, "SEED_FILE", seed)
+    monkeypatch.setattr(settings, "paypal_mode", "sandbox")
+    inbox.sandbox_ids.cache_clear()
+    counter = {"n": 0}
+
+    def create(req):
+        counter["n"] += 1
+        return httpx.Response(201, json=_card_order(f"ORD{counter['n']}", f"CAP{counter['n']}"))
+
+    async def go():
+        pp, _ = _client({("POST", "/v2/checkout/orders"): create})
+        app = build_app(Warden(pp, Ledger(":memory:")))
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+            r = (await c.post("/api/reset")).json()
+            assert r["ok"] and r["fresh_captures"] == {"4RT88014HN112233K": "CAP1", "9LM20577QW341870P": "CAP2", "1VC66309TR775024A": "CAP3"}
+            data = json.loads(seed.read_text())
+            assert data["captures"]["6DW31852LP480916E"] == "PLANTER_CAP"  # the dispute's capture is untouched
+            assert data["orders"]["7XK21934UB556120D"] == "ORD1" and data["disputes"] == {"PP-D-55210": "PP-D-REAL"}
+            assert "ORD1" in inbox.localize("order 7XK21934UB556120D")  # the inbox sees the new ids right away
+
+            await c.post("/api/reset")
+            assert json.loads(seed.read_text())["captures"]["4RT88014HN112233K"] == "CAP4"  # fresh again
+            await c.post("/api/reset")
+            r = await c.post("/api/reset")
+            assert r.status_code == 429 and counter["n"] == 9  # 3 resets a minute; the 4th creates no orders
+    asyncio.run(go())
+    inbox.sandbox_ids.cache_clear()

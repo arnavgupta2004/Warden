@@ -23,6 +23,7 @@ from pathlib import Path
 import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
+from demo.inbox import REFUND_SEEDS  # noqa: E402
 from warden.config import load_dotenv  # noqa: E402
 
 load_dotenv()
@@ -31,13 +32,9 @@ CID = os.getenv("PAYPAL_CLIENT_ID")
 SEC = os.getenv("PAYPAL_CLIENT_SECRET")
 OUT = Path(__file__).resolve().parent.parent / "backend" / "sandbox_seed.json"
 
-# simulator capture id, simulator order id, amount, description
-SEEDS = [
-    ("4RT88014HN112233K", "7XK21934UB556120D", "42.00", "Stoneware mug set (4)"),
-    ("9LM20577QW341870P", "2HB90321KE118845M", "180.00", "Walnut desk lamp"),
-    ("1VC66309TR775024A", "5NF44208GX903317J", "220.00", "Linen throw + cushions"),
-    ("6DW31852LP480916E", "8QT75510MC227094R", "64.00", "Ceramic planter"),
-]
+# simulator capture id, simulator order id, amount, description. The refund scenarios are shared with
+# Reset demo; the planter is bought with a real buyer login so it can carry a dispute.
+SEEDS = REFUND_SEEDS + [("6DW31852LP480916E", "8QT75510MC227094R", "64.00", "Ceramic planter")]
 SIM_INVOICE = "INV2-KST7-4Q2M-8ZP3-HC41"
 
 

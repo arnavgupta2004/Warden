@@ -248,3 +248,18 @@ def test_rest_api_and_webhook_settlement():
             assert (await c.get("/api/ledger")).json()[0]["status"] == "settled"
             assert (await c.get("/api/verify")).json()["ok"]
     run(go())
+
+
+
+def test_split_refunds_are_caught_without_a_payer_email():
+    # Card payments have no PayPal payer email; the split rule groups refunds by capture, so it still fires.
+    async def go():
+        w, _ = await make()
+        w.backend.captures["1VC66309TR775024A"]["_payer_email"] = ""
+        for _ in range(2):
+            await w.call_tool("s", "backoffice-agent", "create_refund", {"capture_id": "1VC66309TR775024A", "amount": 45},
+                              wait_for_approval=False)
+        first, second = by_tool(w, "create_refund")  # oldest first
+        assert first.counterparty == "" and first.verdict == Verdict.ALLOW
+        assert any(f.rule == "split_payments" for f in second.findings) and second.verdict == Verdict.STEP_UP
+    run(go())

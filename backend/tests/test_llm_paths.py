@@ -413,3 +413,31 @@ def test_gemini_agent_runs_have_their_own_tighter_limit():
             r = await g("198.51.100.1")
             assert r.status_code == 429 and "tomorrow" in r.json()["detail"]
     asyncio.run(go())
+
+
+
+def test_daily_cap_stops_gemini_for_the_rest_of_the_utc_day(monkeypatch):
+    import json as _json
+    seen = _gemini_http(monkeypatch, lambda req: _ok("answer"))
+    monkeypatch.setattr(llm.settings, "llm_daily_cap", 2)
+    monkeypatch.setattr(llm, "_limited_until", 0.0)
+
+    async def go():
+        assert await llm.complete_text("s", "a") == "answer"
+        assert await llm.complete_text("s", "b") == "answer"
+        assert llm.capped() and llm.calls_today() == 2
+        assert await llm.complete_text("s", "c") is None and len(seen) == 2  # over the cap: no request, fallback
+        assert await llm.complete_text("s", "a") == "answer"  # cached answers still work, for free
+        # Rules still run: a $42 refund is decided deterministically, with no Gemini request.
+        m = await mandate_mod.compile_mandate(DEFAULT_MANDATE)
+        w = Warden(Simulator(), Ledger(":memory:"))
+        w.set_mandate(m)
+        r = await w.call_tool("s", m.agent_id, "create_refund", {"capture_id": "4RT88014HN112233K", "amount": 42}, wait_for_approval=False)
+        assert r["status"] == "executed" and len(seen) == 2
+        # Persisted per UTC date: a restart keeps the count; a new day starts at zero.
+        llm.usage_reset()
+        assert llm.capped()
+        open(llm.settings.llm_usage_path, "w").write(_json.dumps({"date": "2000-01-01", "count": 999}))
+        llm.usage_reset()
+        assert not llm.capped() and llm.calls_today() == 0
+    asyncio.run(go())

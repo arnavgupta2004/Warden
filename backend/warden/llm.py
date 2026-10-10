@@ -11,6 +11,7 @@ import os
 import re
 import time
 from collections import OrderedDict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +34,14 @@ _cache: OrderedDict[str, Any] | None = None
 _last_quota: dict[str, Any] = {}  # what Gemini's last 429 said: which quota, its limit, retry delay
 
 
+_usage: dict[str, Any] | None = None  # {"date": "YYYY-MM-DD" (UTC), "count": Gemini requests that day}
+
+
 class RateLimited(RuntimeError):
+    pass
+
+
+class DailyCapReached(RateLimited):
     pass
 
 
@@ -44,6 +52,45 @@ def enabled() -> bool:
 def limited() -> bool:
     """True while Gemini is cooling down after a quota (429) error."""
     return time.monotonic() < _limited_until
+
+
+def _today() -> str:
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+def _usage_today() -> dict[str, Any]:
+    global _usage
+    if _usage is None:
+        try:
+            _usage = json.loads(Path(settings.llm_usage_path).read_text())
+        except (OSError, ValueError):
+            _usage = {}
+    if _usage.get("date") != _today():
+        _usage = {"date": _today(), "count": 0}
+    return _usage
+
+
+def calls_today() -> int:
+    return int(_usage_today()["count"])
+
+
+def capped() -> bool:
+    """True once today's (UTC) Gemini requests reach WARDEN_LLM_DAILY_CAP."""
+    return settings.llm_daily_cap > 0 and calls_today() >= settings.llm_daily_cap
+
+
+def _count_request() -> None:
+    u = _usage_today()
+    u["count"] += 1
+    try:
+        Path(settings.llm_usage_path).write_text(json.dumps(u))
+    except OSError:
+        pass
+
+
+def usage_reset() -> None:
+    global _usage
+    _usage = None
 
 
 def parse_quota(body: str) -> dict[str, Any]:
@@ -105,6 +152,8 @@ async def gemini_generate(body: dict[str, Any], timeout: float = SLOW_TIMEOUT_S)
     Raises RateLimited during a quota cooldown, RuntimeError on other HTTP
     errors, and asyncio.TimeoutError past `timeout` seconds."""
     global _http
+    if capped():
+        raise DailyCapReached("Warden's daily Gemini cap is reached")
     if limited():
         raise RateLimited("Gemini is cooling down after a quota error")
     if _http is None:
@@ -113,9 +162,11 @@ async def gemini_generate(body: dict[str, Any], timeout: float = SLOW_TIMEOUT_S)
     async def post() -> httpx.Response:
         url = f"{GEMINI_BASE}/models/{settings.llm_model}:generateContent"
         headers = {"x-goog-api-key": settings.gemini_api_key}
+        _count_request()
         r = await _http.post(url, headers=headers, json=body)
-        if r.status_code == 503:  # "high demand" blip: one retry, still inside the hard timeout
+        if r.status_code == 503 and not capped():  # "high demand" blip: one retry, still inside the hard timeout
             await asyncio.sleep(RETRY_503_DELAY_S)
+            _count_request()
             r = await _http.post(url, headers=headers, json=body)
         return r
 

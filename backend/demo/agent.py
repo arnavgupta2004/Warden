@@ -185,6 +185,9 @@ class GeminiAgent:
             try:
                 resp = await llm.gemini_generate({"systemInstruction": {"parts": [{"text": SYSTEM}]}, "contents": contents, "tools": tools},
                                                  timeout=llm.SLOW_TIMEOUT_S)
+            except llm.DailyCapReached:
+                tr.emit("final", "Warden's Gemini limit for today is reached, so the Gemini agent stopped. Warden's rules are still enforced; try the gullible agent.")
+                return tr.lines
             except llm.RateLimited:
                 tr.emit("final", "Gemini is rate-limited right now, so the Gemini agent stopped. Warden's rules are still enforced; try the gullible agent.")
                 return tr.lines

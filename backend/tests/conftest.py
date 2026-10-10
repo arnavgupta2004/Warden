@@ -19,6 +19,9 @@ def fresh_llm_cache(tmp_path, monkeypatch):
     """Each test gets its own empty Gemini response cache."""
     from warden import llm
     monkeypatch.setattr(settings, "llm_cache_path", str(tmp_path / "llm_cache.json"))
+    monkeypatch.setattr(settings, "llm_usage_path", str(tmp_path / "llm_usage.json"))
     llm.cache_reset()
+    llm.usage_reset()
     yield
     llm.cache_reset()
+    llm.usage_reset()

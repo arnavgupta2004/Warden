@@ -58,6 +58,11 @@ class Settings:
         )
     )
     # Gemini answers keyed by a hash of (model, prompts, schema), so repeated runs and restarts reuse them.
+    # Site-wide Gemini requests per UTC day (about 70% of the free daily quota); 0 turns the cap off.
+    llm_daily_cap: int = field(default_factory=lambda: int(os.getenv("WARDEN_LLM_DAILY_CAP", "700")))
+    llm_usage_path: str = field(
+        default_factory=lambda: os.getenv("WARDEN_LLM_USAGE", str(Path(__file__).resolve().parent.parent / "llm_usage.json"))
+    )
     llm_cache_path: str = field(
         default_factory=lambda: os.getenv("WARDEN_LLM_CACHE", str(Path(__file__).resolve().parent.parent / "llm_cache.json"))
     )

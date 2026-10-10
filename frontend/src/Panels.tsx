@@ -18,10 +18,22 @@ export function Header({ status, connected, onReset }: { status: Status | null; 
       <div className="chips">
         <span className={`chip ${status?.paypal_mode === "sandbox" ? "chip-ok" : ""}`} title="Where payments are sent">{mode}</span>
         <span
-          className={`chip ${status?.llm && !status.llm_limited ? "chip-ok" : ""}`}
-          title={status?.llm_limited ? "Gemini hit its usage limit. Every hard rule still applies; Gemini's extra checks resume shortly." : status?.llm_model ?? "Set GEMINI_API_KEY to enable"}
+          className={`chip ${status?.llm && !status.llm_limited && !status.llm_capped ? "chip-ok" : ""}`}
+          title={
+            status?.llm_capped
+              ? "This demo used its Gemini budget for today. Every hard rule still applies; Gemini's checks resume tomorrow (UTC)."
+              : status?.llm_limited
+                ? "Gemini hit its usage limit. Every hard rule still applies; Gemini's extra checks resume shortly."
+                : status?.llm_model ?? "Set GEMINI_API_KEY to enable"
+          }
         >
-          {!status?.llm ? "Gemini off" : status.llm_limited ? "Gemini limited, rules still enforced" : "Gemini on"}
+          {!status?.llm
+            ? "Gemini off"
+            : status.llm_capped
+              ? "Gemini limit reached for today, rules still enforced"
+              : status.llm_limited
+                ? "Gemini limited, rules still enforced"
+                : "Gemini on"}
         </span>
         <span className={`chip ${status?.chain.ok ? "chip-ok" : "chip-bad"}`} title={status?.chain.tip ?? ""}>
           {status ? (status.chain.ok ? `Ledger intact, ${status.chain.records} records` : "Ledger tampered") : "Ledger"}
