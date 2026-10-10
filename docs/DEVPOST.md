@@ -32,6 +32,7 @@ Allowed actions execute on PayPal. Held actions go to the owner's phone and run 
 
 ## Accomplishments
 - A hidden white-text injection and a payment-redirect scam are both blocked before reaching PayPal, while routine refunds and dispute responses still run without a human.
+- A real model falls for it too: the live Gemini agent paid the lookalike address in the payment-redirect email, and Warden blocked it. On the hidden-injection email Gemini resisted the trick, but the gullible agent shows what happens when a model doesn't. Some models resist; Warden doesn't rely on them resisting.
 - One-line integration for any MCP agent.
 
 ## What we learned
