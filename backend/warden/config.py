@@ -7,7 +7,10 @@ from pathlib import Path
 
 
 def load_dotenv() -> None:
-    """Read KEY=VALUE lines from the repo's .env (or backend/.env). Real env vars win."""
+    """Read KEY=VALUE lines from the repo's .env (or backend/.env). Real env vars win.
+    WARDEN_NO_DOTENV=1 skips it (the tests set this so they never see real credentials)."""
+    if os.getenv("WARDEN_NO_DOTENV"):
+        return
     backend = Path(__file__).resolve().parent.parent
     for path in (backend.parent / ".env", backend / ".env"):
         if not path.is_file():

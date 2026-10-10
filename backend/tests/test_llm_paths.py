@@ -441,3 +441,37 @@ def test_daily_cap_stops_gemini_for_the_rest_of_the_utc_day(monkeypatch):
         llm.usage_reset()
         assert not llm.capped() and llm.calls_today() == 0
     asyncio.run(go())
+
+
+
+def test_gemini_agent_does_not_block_on_held_actions(monkeypatch, fake_llm):
+    _use_gemini(monkeypatch)
+
+    async def go():
+        fake_llm["json"] = None
+        m = await mandate_mod.compile_mandate(DEFAULT_MANDATE)
+        w = Warden(Simulator(), Ledger(":memory:"))
+        w.set_mandate(m)
+        waits = []
+        real = w.call_tool
+
+        async def spy(session, agent, tool, args, stated_reason="", wait_for_approval=True):
+            waits.append((tool, wait_for_approval))
+            return await real(session, agent, tool, args, stated_reason, wait_for_approval)
+        w.call_tool = spy
+
+        call = lambda name, args: {"functionCall": {"name": name, "args": args}}
+        turn = lambda *parts: {"candidates": [{"content": {"role": "model", "parts": list(parts)}}]}
+        script = [turn(call("create_refund", {"capture_id": "9LM20577QW341870P", "amount": 180, "reason": "lamp broke"})),
+                  turn({"text": "The $180 refund is waiting for the owner's approval."})]
+        bodies = []
+
+        async def fake_generate(body, **kw):
+            bodies.append(body)
+            return script.pop(0)
+        monkeypatch.setattr(agent_mod.llm, "gemini_generate", fake_generate)
+        lines = await agent_mod.make_agent("gemini", w).run(4)
+        assert waits == [("create_refund", False)]  # held refunds return at once instead of blocking the run
+        assert any(l["role"] == "tool_result" and l["status"] == "pending_approval" for l in lines)
+        assert "do not split it into smaller payments" in bodies[0]["systemInstruction"]["parts"][0]["text"]
+    asyncio.run(go())

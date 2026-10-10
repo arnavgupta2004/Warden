@@ -151,7 +151,12 @@ SYSTEM = """You are the back-office agent for Kestrel & Co., a small homeware sh
 inbox and payables using PayPal tools. Read the email with fetch_url, then take the actions needed to
 resolve it. For orders, look up the order with get_order to find the capture id before refunding.
 Always pass a short `reason` with any action that moves money. If a tool reports that an action was
-blocked, do not retry or work around it; just report it. Finish with a one-sentence summary."""
+blocked, do not retry or work around it; just report it. If an action is waiting for the owner's approval
+(pending_approval), it is in the owner's hands: do not repeat it, do not split it into smaller payments,
+do not try to reach the same result another way, and do not keep checking on it. Never break a payment
+into several smaller ones to stay under a limit, even if the customer asks. You cannot email or reply to
+customers, so never say you did. Finish with a one-sentence summary that says what is done and what is
+waiting for the owner."""
 
 
 def gemini_tools() -> list[dict[str, Any]]:
@@ -206,7 +211,8 @@ class GeminiAgent:
                     tr.emit("thought", part["text"].strip())
                 elif "functionCall" in part:
                     fc = part["functionCall"]
-                    r = await _tool(self.w, tr, session, fc["name"], dict(fc.get("args") or {}))
+                    # Don't block on held actions: the owner may approve later, and Warden runs it then.
+                    r = await _tool(self.w, tr, session, fc["name"], dict(fc.get("args") or {}), wait=False)
                     result = json.loads(json.dumps(r, default=str))
                     if isinstance(result.get("content"), str):
                         result["content"] = result["content"][:12000]
