@@ -44,5 +44,5 @@ Per-agent mandates for teams, PayPal Payouts batch limits, and support for buyer
 python, fastapi, paypal-rest-api, paypal-payouts, paypal-invoicing, paypal-disputes, model-context-protocol, gemini, gemini-api, react, typescript, ag-grid, vite, sqlite, docker, render, ntfy
 
 ## Testing instructions for judges
-- **Hosted demo:** <your Render URL>. It runs on Render's free plan, so the first visit can take up to a minute to wake. Click **Reset demo** for a clean run (it creates fresh PayPal sandbox payments for the refund emails), then **Give to agent** on any inbox email.
+- **Hosted demo:** https://warden-tybr.onrender.com. It runs on Render's free plan, so the first visit can take up to a minute to wake. Click **Reset demo** for a clean run (it creates fresh PayPal sandbox payments for the refund emails), then **Give to agent** on any inbox email.
 - **Locally:** see the README Quick start. It runs with no keys using the PayPal simulator. Add sandbox keys and run `scripts/seed_sandbox.py` to use the real PayPal sandbox.

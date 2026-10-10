@@ -2,6 +2,8 @@
 
 **A PayPal firewall for AI agents.** Warden sits between any AI agent and PayPal. It lets the agent refund customers, pay contractors and answer disputes on its own, inside limits you set in plain English. It stops the agent when someone tries to steer it into sending your money somewhere else.
 
+**Live demo:** [warden-tybr.onrender.com](https://warden-tybr.onrender.com) (real PayPal sandbox; the first visit can take up to a minute to wake)
+
 ![Warden blocking a payout that was requested by text hidden in a support email](docs/screenshot.png)
 
 ## The problem
@@ -59,15 +61,18 @@ The **gullible agent** does whatever an email says, including hidden instruction
 
 ## Quick start
 
-No credentials needed. Without PayPal keys, Warden uses a built-in PayPal simulator that returns the same response shapes as the REST API.
+No credentials needed. Without PayPal keys, Warden uses a built-in PayPal simulator that returns the same response shapes as the REST API. You need Python 3.10+ and Node 18+ (tested with Python 3.12 and 3.13, Node 22 and 24).
 
 ```bash
+git clone https://github.com/arnavgupta2004/Warden.git
+cd Warden
+
 # backend
 cd backend
 pip install -r requirements.txt
 uvicorn warden.app:app --port 8000
 
-# dashboard (second terminal)
+# dashboard (second terminal, from the Warden folder)
 cd frontend
 npm install
 npm run dev          # http://localhost:5173
@@ -77,7 +82,7 @@ Or use one container: `docker build -t warden . && docker run -p 8000:8000 warde
 
 Click **Give to agent** on any email in the inbox panel.
 
-**Hosted demo:** the free Render instance sleeps when idle, so the first visit can take up to a minute to wake. Click **Reset demo** for a clean run: in sandbox mode it also creates fresh sandbox payments for the refund emails.
+**Hosted demo** ([warden-tybr.onrender.com](https://warden-tybr.onrender.com)): the free Render instance sleeps when idle, so the first visit can take up to a minute to wake. Click **Reset demo** for a clean run: in sandbox mode it also creates fresh sandbox payments for the refund emails.
 
 The hosted demo runs with `WARDEN_PUBLIC_DEMO=1`. Visitors can edit and compile the mandate, but server-side ceilings apply whatever it says: $1,500 a week, $500 per payment, and the default trusted payees plus at most two more. Clamped values show "capped for the public demo". Every agent id (dashboard, REST, MCP) shares that one budget, so the sandbox balance can't be drained. **Reset demo**, or 15 minutes without activity, brings back the default mandate. Approvals stay open so anyone can try **Approve**, and the ledger records each approver's address.
 

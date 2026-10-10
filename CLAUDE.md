@@ -25,8 +25,8 @@ Warden is a policy gateway between AI agents and PayPal: provenance tracking + m
 - Colors live in CSS variables in `styles.css` (light and dark).
 - Demo content is fictional (".example" domains). Don't use real brands or people.
 
-## Open to-dos before submitting
-1. Run `scripts/seed_sandbox.py` against a real sandbox app and click through all six emails in sandbox mode. Fix any API-shape surprises in `paypal/sandbox.py`. Dispute evidence (multipart) and Payouts permissions are the likeliest ones.
-2. Deploy to Render (`render.yaml`). Set WARDEN_PUBLIC_URL, the PayPal keys, GEMINI_API_KEY and WARDEN_NTFY_TOPIC.
-3. Record the video from `docs/DEMO_SCRIPT.md`. Fill in `docs/DEVPOST.md` and submit.
-4. Make the GitHub repo public, with the license showing in the About sidebar.
+## Status and open to-dos before submitting
+- Done: real-sandbox path verified (emails 1-5, MCP example, webhooks settle), deployed at https://warden-tybr.onrender.com (WARDEN_PUBLIC_DEMO=1), public repo github.com/arnavgupta2004/Warden.
+- Email 6 needs a real sandbox dispute on the planter order; map its id via WARDEN_SANDBOX_SEED (Render) or backend/sandbox_seed.json.
+- Record the video from `docs/DEMO_SCRIPT.md`, then submit `docs/DEVPOST.md`.
+- Batch commits: every push redeploys Render and wipes its ephemeral disk (ledger, seed, caches).
