@@ -15,6 +15,11 @@ services:
         sync: false
       - key: GEMINI_API_KEY
         sync: false
+      - key: WARDEN_LLM_DAILY_CAP
+        value: "700"
+      # JSON with the sandbox invoice and dispute ids, e.g. {"invoices": {...}, "disputes": {...}}
+      - key: WARDEN_SANDBOX_SEED
+        sync: false
       - key: WARDEN_SIGNING_KEY
         generateValue: true
       - key: WARDEN_NTFY_TOPIC

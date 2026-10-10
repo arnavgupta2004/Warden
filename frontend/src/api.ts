@@ -82,6 +82,7 @@ export interface DemoEmail {
   scenario: string;
   summary: string;
   html: string;
+  unavailable: string | null;
 }
 
 export interface AgentLine {

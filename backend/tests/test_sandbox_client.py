@@ -296,3 +296,44 @@ def test_reset_gives_refund_scenarios_fresh_captures(tmp_path, monkeypatch):
             assert r.status_code == 429 and counter["n"] == 9  # 3 resets a minute; the 4th creates no orders
     asyncio.run(go())
     inbox.sandbox_ids.cache_clear()
+
+
+
+def test_sandbox_seed_env_merges_over_file_and_gates_email_6(tmp_path, monkeypatch):
+    from demo import inbox
+    from warden.app import build_app
+    from warden.config import settings
+    from warden.gateway import Warden
+    from warden.ledger import Ledger
+    from warden.paypal import Simulator
+
+    seed = tmp_path / "sandbox_seed.json"
+    seed.write_text(json.dumps({"captures": {"4RT88014HN112233K": "FILECAP"}, "invoices": {"INV2-KST7-4Q2M-8ZP3-HC41": "INV-FILE"}}))
+    monkeypatch.setattr(inbox, "SEED_FILE", seed)
+    monkeypatch.setattr(settings, "paypal_mode", "sandbox")
+    monkeypatch.delenv("WARDEN_SANDBOX_SEED", raising=False)
+    inbox.sandbox_ids.cache_clear()
+
+    async def go():
+        app = build_app(Warden(Simulator(), Ledger(":memory:")))
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+            six = next(e for e in (await c.get("/api/demo/emails")).json() if e["n"] == 6)
+            assert six["unavailable"] == "Needs a sandbox dispute"
+            r = await c.post("/api/demo/run", json={"email": 6})
+            assert r.status_code == 409 and "README" in r.json()["detail"]
+            assert next(e for e in (await c.get("/api/demo/emails")).json() if e["n"] == 1)["unavailable"] is None
+
+            # WARDEN_SANDBOX_SEED (e.g. on Render) adds the dispute and overrides the invoice; file captures stay.
+            monkeypatch.setenv("WARDEN_SANDBOX_SEED", json.dumps({"invoices": {"INV2-KST7-4Q2M-8ZP3-HC41": "INV-ENV"},
+                                                                  "disputes": {"PP-D-55210": "PP-D-REAL"}}))
+            inbox.sandbox_ids.cache_clear()
+            six = next(e for e in (await c.get("/api/demo/emails")).json() if e["n"] == 6)
+            assert six["unavailable"] is None and "PP-D-REAL" in six["subject"]
+            assert inbox.sandbox_ids()["INV2-KST7-4Q2M-8ZP3-HC41"] == "INV-ENV"
+            assert inbox.sandbox_ids()["4RT88014HN112233K"] == "FILECAP"
+
+            monkeypatch.setenv("WARDEN_SANDBOX_SEED", "{not json")
+            inbox.sandbox_ids.cache_clear()
+            assert inbox.sandbox_ids()["4RT88014HN112233K"] == "FILECAP"  # bad JSON is ignored, not fatal
+    asyncio.run(go())
+    inbox.sandbox_ids.cache_clear()

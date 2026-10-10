@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import html
 import json
+import logging
 import os
 from dataclasses import dataclass
 from functools import lru_cache
@@ -14,19 +15,45 @@ from pathlib import Path
 
 from warden.config import settings
 
+log = logging.getLogger("warden.demo")
+
 SEED_FILE = Path(os.getenv("WARDEN_SEED_FILE", Path(__file__).resolve().parent.parent / "sandbox_seed.json"))
+
+
+SEED_GROUPS = ("orders", "captures", "invoices", "disputes")
+SIM_DISPUTE = "PP-D-55210"  # the dispute id in email 6
 
 
 @lru_cache(maxsize=1)
 def sandbox_ids() -> dict[str, str]:
-    """Simulator id -> real sandbox id, written by scripts/seed_sandbox.py."""
-    if not settings.use_sandbox or not SEED_FILE.exists():
+    """Simulator id -> real sandbox id (seed file, with WARDEN_SANDBOX_SEED merged over it)."""
+    if not settings.use_sandbox:
         return {}
-    data = json.loads(SEED_FILE.read_text())
+    data = _read_seed()
     out: dict[str, str] = {}
-    for group in ("orders", "captures", "invoices", "disputes"):
-        out.update(data.get(group, {}))
+    for group in SEED_GROUPS:
+        out.update(data[group])
     return out
+
+
+def _env_seed() -> dict:
+    """WARDEN_SANDBOX_SEED: JSON like {"invoices": {...}, "disputes": {...}}, for hosts with no seed file."""
+    raw = os.getenv("WARDEN_SANDBOX_SEED", "").strip()
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else {}
+    except ValueError:
+        log.warning("WARDEN_SANDBOX_SEED is not valid JSON; ignoring it.")
+        return {}
+
+
+def unavailable_reason(e: "Email") -> str | None:
+    """Why an email can't be handed to the agent right now, if it can't."""
+    if settings.use_sandbox and e.scenario == "dispute" and SIM_DISPUTE not in _read_seed()["disputes"]:
+        return "Needs a sandbox dispute"
+    return None
 
 
 # Refund scenarios whose captures Reset demo replaces in sandbox mode (refunds can't be undone):
@@ -43,8 +70,9 @@ def _read_seed() -> dict:
         data = json.loads(SEED_FILE.read_text())
     except (OSError, ValueError):
         data = {}
-    for group in ("orders", "captures", "invoices", "disputes"):
-        data.setdefault(group, {})
+    env = _env_seed()
+    for group in SEED_GROUPS:
+        data[group] = {**(data.get(group) or {}), **(env.get(group) or {})}
     return data
 
 

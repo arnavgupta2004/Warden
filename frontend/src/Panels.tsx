@@ -160,8 +160,9 @@ export function InboxPanel({ emails, agent, setAgent, llm }: { emails: DemoEmail
               <div className="email-subject">{e.subject}</div>
               <div className="email-from">{e.sender.replace(/<.*>/, "").trim()} <span className={`hint hint-${e.scenario}`}>{SCENARIO_HINT[e.scenario]}</span></div>
             </div>
-            <button className="run" onClick={() => run(e.n)} disabled={running === e.n}>
-              {running === e.n ? "Sent" : "Give to agent"}
+            <button className="run" onClick={() => run(e.n)} disabled={running === e.n || !!e.unavailable}
+              title={e.unavailable ? "Open a dispute on the planter order in the PayPal sandbox; the README explains how." : undefined}>
+              {e.unavailable ?? (running === e.n ? "Sent" : "Give to agent")}
             </button>
           </li>
         ))}

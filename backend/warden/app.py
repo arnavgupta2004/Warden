@@ -243,18 +243,20 @@ def build_app(warden: Warden | None = None) -> FastAPI:
     # --------------------------------------------------------------- demo
     @app.get("/api/demo/emails")
     async def demo_emails() -> list[dict[str, Any]]:
-        from demo.inbox import EMAILS, localize
+        from demo.inbox import EMAILS, localize, unavailable_reason
         return [{"n": e.n, "sender": e.sender, "subject": localize(e.subject), "scenario": e.scenario, "summary": e.summary,
-                 "html": localize(e.body_html)} for e in EMAILS]
+                 "html": localize(e.body_html), "unavailable": unavailable_reason(e)} for e in EMAILS]
 
     @app.post("/api/demo/run")
     async def demo_run(body: RunIn, request: Request) -> dict[str, Any]:
         _limit(app.state.gemini_run_limiters if body.agent == "gemini" else app.state.run_limiters, request,
                "Gemini agent runs" if body.agent == "gemini" else "demo runs")
         from demo.agent import make_agent
-        from demo.inbox import BY_N
+        from demo.inbox import BY_N, unavailable_reason
         if body.email not in BY_N:
             raise HTTPException(404, "unknown email")
+        if reason := unavailable_reason(BY_N[body.email]):
+            raise HTTPException(409, f"{reason}. See the README to set one up.")
         run_id = uuid.uuid4().hex[:8]
         agent = make_agent(body.agent, warden)
         app.state.runs[run_id] = asyncio.create_task(agent.run(body.email, run_id))
