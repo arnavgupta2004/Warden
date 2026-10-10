@@ -52,6 +52,9 @@ class PayPalSandbox:
         self._token: str | None = None
         self._token_exp = 0.0
         self._http = httpx.AsyncClient(timeout=30)
+        # Dispute ids Warden already knows (e.g. from the demo seed). PayPal's dispute list can miss a
+        # new dispute for a few minutes, so the open-dispute check also looks these up directly.
+        self.known_disputes: set[str] = set()
 
     async def _auth(self) -> str:
         if self._token and time.time() < self._token_exp - 60:
@@ -126,11 +129,22 @@ class PayPalSandbox:
         }
 
     async def _has_open_dispute(self, capture_id: str) -> bool:
+        open_ = lambda d: d.get("status") not in ("RESOLVED", "OTHER")
         try:
             r = await self._req("GET", "/v1/customer/disputes", params={"disputed_transaction_id": capture_id})
+            if any(open_(d) for d in r.get("items", [])):
+                return True
         except PayPalError:
-            return False  # app lacks the Disputes feature; Warden's other checks still apply
-        return any(d.get("status") not in ("RESOLVED", "OTHER") for d in r.get("items", []))
+            pass  # app lacks the Disputes feature; the known disputes below may still answer
+        for did in sorted(self.known_disputes):
+            try:
+                d = await self._req("GET", f"/v1/customer/disputes/{did}")
+            except PayPalError:
+                continue
+            txs = d.get("disputed_transactions") or []
+            if open_(d) and any(t.get("seller_transaction_id") == capture_id for t in txs):
+                return True
+        return False
 
     async def dispute_facts(self, dispute_id: str) -> dict[str, Any] | None:
         try:
@@ -254,6 +268,15 @@ class PayPalSandbox:
             evidence["evidence_type"] = "PROOF_OF_FULFILLMENT"
             evidence["evidence_info"] = {"tracking_info": [tracking]}
         payload = {"evidences": [evidence]}
+        # PayPal takes the seller's evidence once per request. If it already has it and isn't asking
+        # for more, say so plainly instead of sending again (which PayPal would refuse).
+        d = await self._req("GET", f"/v1/customer/disputes/{dispute_id}")
+        can_send = any(l.get("rel") == "provide_evidence" for l in d.get("links", []))
+        sent = [e for e in d.get("evidences", []) if e.get("source") == "SUBMITTED_BY_SELLER"]
+        if sent and not can_send:
+            return {"already_answered": True, "dispute_id": dispute_id, "status": d.get("status"),
+                    "message": "PayPal already has this shop's evidence for this dispute, so nothing new was sent.",
+                    "seller_evidence": sent}
         return await self._req("POST", f"/v1/customer/disputes/{dispute_id}/provide-evidence",
                                files={"input": (None, json.dumps(payload), "application/json")})
 

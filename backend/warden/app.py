@@ -98,9 +98,17 @@ class RunIn(BaseModel):
 STATIC = Path(__file__).resolve().parent.parent / "static"
 
 
+def _load_known_disputes(warden: Warden) -> None:
+    """Tell the sandbox client which disputes the demo seed maps, for its open-dispute check."""
+    from demo.inbox import _read_seed
+    if getattr(warden.backend, "mode", "") == "sandbox":
+        warden.backend.known_disputes = set(_read_seed()["disputes"].values())
+
+
 async def _ensure_sandbox_captures(warden: Warden) -> None:
     """On a fresh sandbox deployment (no seed file), create the refund scenarios' captures once."""
     from demo.inbox import has_refund_captures, refresh_refund_captures
+    _load_known_disputes(warden)
     if getattr(warden.backend, "mode", "") != "sandbox" or has_refund_captures():
         return
     try:

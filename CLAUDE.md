@@ -6,7 +6,7 @@ Warden is a policy gateway between AI agents and PayPal: provenance tracking + m
 ## Run
 - Backend: `cd backend && pip install -r requirements-dev.txt && uvicorn warden.app:app --reload --port 8000`
 - Frontend: `cd frontend && npm install && npm run dev` (proxies /api, /ws, /mcp, /demo to :8000). `npm run build` writes to `backend/static`, which the backend serves.
-- Tests: `cd backend && pytest` (53 tests, about 5 s, in random order via pytest-randomly; `-p no:randomly` for file order). Keep them green.
+- Tests: `cd backend && pytest` (55 tests, about 5 s, in random order via pytest-randomly; `-p no:randomly` for file order). Keep them green.
 - No PAYPAL_* env → offline simulator (`warden/paypal/simulator.py`). With PAYPAL_CLIENT_ID/SECRET → real sandbox (`warden/paypal/sandbox.py`).
 - No GEMINI_API_KEY → every LLM call falls back to deterministic behavior. Gemini may only make decisions stricter. All model calls go through `warden/llm.py` (Gemini REST via httpx).
 
@@ -27,6 +27,6 @@ Warden is a policy gateway between AI agents and PayPal: provenance tracking + m
 
 ## Status and open to-dos before submitting
 - Done: real-sandbox path verified (emails 1-5, MCP example, webhooks settle), deployed at https://warden-tybr.onrender.com (WARDEN_PUBLIC_DEMO=1), public repo github.com/arnavgupta2004/Warden.
-- Email 6 needs a real sandbox dispute on the planter order; map its id via WARDEN_SANDBOX_SEED (Render) or backend/sandbox_seed.json.
+- Email 6 is wired to sandbox dispute PP-R-DOI-10190915 (planter). Seller evidence was submitted once (verified); repeat runs report "already answered" without resending. Map it via WARDEN_SANDBOX_SEED on Render.
 - Record the video from `docs/DEMO_SCRIPT.md`, then submit `docs/DEVPOST.md`.
 - Batch commits: every push redeploys Render and wipes its ephemeral disk (ledger, seed, caches).

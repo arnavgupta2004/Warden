@@ -25,7 +25,7 @@ Allowed actions execute on PayPal. Held actions go to the owner's phone and run 
 - **AI:** Gemini compiles mandates (cross-checked by a deterministic parser, where the stricter value wins), runs intent checks, explains decisions, drafts dispute evidence, and powers the live demo agent (a Gemini function-calling loop). Gemini can only make a decision stricter, never looser.
 - **Frontend:** React and AG Grid (Theming API, custom cell renderers, quick filter, row rules), with a mobile approval page and ntfy push notifications.
 - **Deploy:** one Docker image on Render.
-- 53 automated tests cover every scenario, the MCP protocol, request shapes for the PayPal client, and the Gemini code paths.
+- 55 automated tests cover every scenario, the MCP protocol, request shapes for the PayPal client, and the Gemini code paths.
 
 ## Challenges
 - Telling a legitimate order id in a customer email apart from an attacker's payee in the same email. Warden weighs arguments by role: refunds can only return to the original payer, so an order id from an email is low risk, while a payout recipient from an email is critical.

@@ -140,7 +140,8 @@ def test_dispute_evidence_carrier_outside_enum_uses_other():
         return httpx.Response(200, json={"links": []})
 
     async def go():
-        pp, _ = _client({("POST", "/v1/customer/disputes/PP-D-9/provide-evidence"): evidence})
+        pp, _ = _client({("POST", "/v1/customer/disputes/PP-D-9/provide-evidence"): evidence,
+                         ("GET", "/v1/customer/disputes/PP-D-9"): {"links": [{"rel": "provide_evidence"}]}})
         for carrier in ("Lumen Freight", "OTHER", "usps"):
             await pp.call("provide_dispute_evidence", {"dispute_id": "PP-D-9", "notes": "Delivered.",
                                                        "tracking_number": "LF1", "carrier": carrier})
@@ -195,7 +196,8 @@ def test_scripted_agent_sends_real_carrier_name_for_dispute_email():
     async def go():
         pp, _ = _client({
             ("GET", "/v1/customer/disputes/PP-D-55210"): {"dispute_id": "PP-D-55210", "status": "WAITING_FOR_SELLER_RESPONSE",
-                                                         "dispute_amount": {"currency_code": "USD", "value": "64.00"}},
+                                                         "dispute_amount": {"currency_code": "USD", "value": "64.00"},
+                                                         "links": [{"rel": "provide_evidence"}]},
             ("POST", "/v1/customer/disputes/PP-D-55210/provide-evidence"): evidence,
         })
         w = Warden(pp, Ledger(":memory:"))
@@ -372,4 +374,45 @@ def test_webhook_verification_rejects_unsigned_or_invalid_events():
                 assert r.status_code == 200 and calls[-1]["webhook_id"] == "WH-1"
         finally:
             settings.paypal_webhook_id = old
+    asyncio.run(go())
+
+
+
+def test_open_dispute_found_by_id_when_the_list_lags():
+    # PayPal's dispute list can miss a new dispute for a few minutes; a known dispute id is checked directly.
+    routes = {
+        ("GET", "/v2/payments/captures/CAP6"): {"id": "CAP6", "status": "COMPLETED", "amount": {"currency_code": "USD", "value": "64.00"}},
+        ("GET", "/v1/customer/disputes"): {"items": []},
+        ("GET", "/v1/customer/disputes/PP-R-1"): {"dispute_id": "PP-R-1", "status": "UNDER_REVIEW",
+                                                  "disputed_transactions": [{"seller_transaction_id": "CAP6"}]},
+        ("GET", "/v1/customer/disputes/PP-R-2"): {"dispute_id": "PP-R-2", "status": "RESOLVED",
+                                                  "disputed_transactions": [{"seller_transaction_id": "CAP7"}]},
+    }
+
+    async def go():
+        pp, _ = _client(routes)
+        assert (await pp.capture_facts("CAP6"))["open_dispute"] is False  # nothing known yet
+        pp.known_disputes = {"PP-R-1", "PP-R-2"}
+        assert (await pp.capture_facts("CAP6"))["open_dispute"] is True
+        routes[("GET", "/v2/payments/captures/CAP7")] = {"id": "CAP7", "status": "COMPLETED",
+                                                         "amount": {"currency_code": "USD", "value": "10.00"}}
+        assert (await pp.capture_facts("CAP7"))["open_dispute"] is False  # that dispute is resolved
+    asyncio.run(go())
+
+
+
+def test_dispute_evidence_not_resent_when_paypal_already_has_it():
+    posts = []
+    answered = {"dispute_id": "PP-R-1", "status": "WAITING_FOR_BUYER_RESPONSE", "links": [{"rel": "self"}, {"rel": "escalate"}],
+                "evidences": [{"source": "SUBMITTED_BY_BUYER"}, {"source": "SUBMITTED_BY_SELLER", "evidence_type": "PROOF_OF_FULFILLMENT"}]}
+
+    def evidence(req):
+        posts.append(req)
+        return httpx.Response(200, json={"links": []})
+
+    async def go():
+        pp, _ = _client({("GET", "/v1/customer/disputes/PP-R-1"): answered,
+                         ("POST", "/v1/customer/disputes/PP-R-1/provide-evidence"): evidence})
+        r = await pp.call("provide_dispute_evidence", {"dispute_id": "PP-R-1", "notes": "Delivered.", "tracking_number": "LF1"})
+        assert r["already_answered"] is True and "nothing new was sent" in r["message"] and not posts
     asyncio.run(go())
