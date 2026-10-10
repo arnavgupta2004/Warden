@@ -171,7 +171,7 @@ backend/
     paypal/         real REST client + offline simulator
     app.py          REST API, websocket, webhooks, dashboard
   demo/             Kestrel & Co. inbox and the two demo agents
-  tests/            46 tests: every scenario, the MCP protocol, the PayPal client, Gemini paths
+  tests/            52 tests: every scenario, the MCP protocol, the PayPal client, Gemini paths
 frontend/           React + AG Grid dashboard and mobile approval page
 scripts/            sandbox seeding, MCP client example
 ```
