@@ -107,10 +107,14 @@ class Warden:
         fallback = top[0].message if top else ""
         # At most one Gemini call per payment: only explain separately if none happened for this decision.
         if llm.enabled() and not d.llm_consulted:
+            outcome = ("BLOCKED: this action did not happen and nothing was sent to PayPal."
+                       if d.verdict == Verdict.DENY else
+                       "HELD: nothing has happened yet; it waits for the owner's approval.")
             txt = await llm.complete_text(
                 "You explain payment-security decisions to a small-business owner in at most two short sentences. "
-                "Plain words, no jargon, no markdown.",
-                f"Verdict: {d.verdict.value}. Action: {call.tool} {call.args}. Reasons: {[x.message for x in top]}",
+                "Write as Warden, using 'we'. Plain words, no jargon, no markdown. Be exact about the outcome: "
+                "never say an action happened when it did not.",
+                f"Outcome: {outcome}\nAction the agent tried: {call.tool} {call.args}\nReasons: {[x.message for x in top]}",
             )
             if txt:
                 return txt

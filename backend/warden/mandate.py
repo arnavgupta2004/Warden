@@ -107,8 +107,11 @@ LLM_SYSTEM = """You compile a business owner's plain-English instructions for an
 spending mandate for PayPal operations. Be conservative: when the text is ambiguous, choose the
 stricter limit. Never invent payees. Output JSON with keys:
 purpose (string), currency (ISO code), budget_total (number), budget_window ("day"|"week"|"month"|"total"),
-per_tx_max (number, 0 if unstated), auto_approve_below (number: money moves at or above this need human approval, 0 if unstated),
-refund_auto_max (number or null), capabilities (subset of ["refunds","payouts","invoicing","disputes","shipping"]),
+per_tx_max (number: a cap the owner states for every single payment of any kind; 0 if unstated. A limit for one
+named payee is that payee's max_per_payment, not per_tx_max),
+auto_approve_below (number: a threshold the owner states for ALL money moves, at or above which a human must approve;
+0 if unstated. A refund-only limit is refund_auto_max, not this),
+refund_auto_max (number or null: refunds above this need the owner's approval), capabilities (subset of ["refunds","payouts","invoicing","disputes","shipping"]),
 trusted_payees (list of {name, email, max_per_payment|null}), blocked_categories (list of strings),
 new_payee_requires_approval (boolean), max_moves_per_hour (integer)."""
 

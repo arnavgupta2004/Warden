@@ -28,6 +28,7 @@ def fake_llm(monkeypatch):
 
     async def ct(system, user, **kw):
         state["text_calls"] += 1
+        state["last_text_prompt"] = user
         return state["text"]
 
     for mod in (llm, mandate_mod.llm, policy_mod.llm):
@@ -256,6 +257,8 @@ def test_one_gemini_call_per_payment(fake_llm):
         e = await _decide(fake_llm, "create_payout", {"receiver_email": "maya.chen.studio@payout-desk.example", "amount": 380}, aligned)
         assert e.verdict == Verdict.DENY and e.explanation == "Short explanation."
         assert (fake_llm["json_calls"], fake_llm["text_calls"]) == (0, 1)
+        # Gemini is told plainly that the action did not happen, so it can't claim otherwise.
+        assert "BLOCKED: this action did not happen" in fake_llm["last_text_prompt"]
     asyncio.run(go())
 
 
