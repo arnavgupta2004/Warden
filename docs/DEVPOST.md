@@ -2,6 +2,8 @@
 
 **Project name:** Warden
 
+**Video:** https://youtu.be/N84p8ZItSKw
+
 **Tagline:** A PayPal firewall for AI agents. Let agents refund, pay and invoice on their own without handing them the keys.
 
 ## Inspiration

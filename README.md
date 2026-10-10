@@ -2,7 +2,7 @@
 
 **A PayPal firewall for AI agents.** Warden sits between any AI agent and PayPal. It lets the agent refund customers, pay contractors and answer disputes on its own, inside limits you set in plain English. It stops the agent when someone tries to steer it into sending your money somewhere else.
 
-**Live demo:** [warden-tybr.onrender.com](https://warden-tybr.onrender.com) (real PayPal sandbox; the first visit can take up to a minute to wake)
+**Live demo:** [warden-tybr.onrender.com](https://warden-tybr.onrender.com) (real PayPal sandbox; the first visit can take up to a minute to wake) · **Video:** [2-minute walkthrough on YouTube](https://youtu.be/N84p8ZItSKw)
 
 ![Warden blocking a payout that was requested by text hidden in a support email](docs/screenshot.png)
 
