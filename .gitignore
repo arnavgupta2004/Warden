@@ -12,4 +12,5 @@ dist/
 .DS_Store
 .venv/
 *.tsbuildinfo
-backend/mandate_cache.json
+backend/llm_cache.json
+backend/llm_cache.tmp

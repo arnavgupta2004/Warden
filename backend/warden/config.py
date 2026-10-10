@@ -44,7 +44,7 @@ class Settings:
     paypal_mode: str = field(default_factory=lambda: os.getenv("WARDEN_PAYPAL_MODE", ""))
 
     gemini_api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY", ""))
-    llm_model: str = field(default_factory=lambda: os.getenv("WARDEN_GEMINI_MODEL", "gemini-3.5-flash"))
+    llm_model: str = field(default_factory=lambda: os.getenv("WARDEN_GEMINI_MODEL", "gemini-3.5-flash-lite"))
     llm_disabled: bool = field(default_factory=lambda: _bool("WARDEN_DISABLE_LLM"))
     # Hard limit for the quick calls (intent check, explanations); past it Warden uses its deterministic path.
     llm_timeout_s: float = field(default_factory=lambda: float(os.getenv("WARDEN_LLM_TIMEOUT", "8")))
@@ -57,11 +57,9 @@ class Settings:
             "WARDEN_DB", str(Path(__file__).resolve().parent.parent / "warden.db")
         )
     )
-    # Gemini's compiled mandates, keyed by a hash of the text, so restarts don't recompile.
-    mandate_cache_path: str = field(
-        default_factory=lambda: os.getenv(
-            "WARDEN_MANDATE_CACHE", str(Path(__file__).resolve().parent.parent / "mandate_cache.json")
-        )
+    # Gemini answers keyed by a hash of (model, prompts, schema), so repeated runs and restarts reuse them.
+    llm_cache_path: str = field(
+        default_factory=lambda: os.getenv("WARDEN_LLM_CACHE", str(Path(__file__).resolve().parent.parent / "llm_cache.json"))
     )
     approval_timeout_s: float = field(
         default_factory=lambda: float(os.getenv("WARDEN_APPROVAL_TIMEOUT", "45"))

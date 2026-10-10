@@ -47,8 +47,8 @@ export function MandatePanel({ mandate, spent }: { mandate: Mandate | null; spen
       await api.setMandate(text);
       setEditing(false);
     } catch (e) {
-      setErr(String(e).includes("429")
-        ? "Too many changes from your address. Try again in a minute."
+      setErr((e as { status?: number }).status === 429
+        ? String((e as { detail?: string }).detail)
         : "Warden couldn't compile that. Check the limits are written as amounts, like $50.");
     } finally {
       setBusy(false);
@@ -125,7 +125,7 @@ export function InboxPanel({ emails, agent, setAgent, llm }: { emails: DemoEmail
     try {
       await api.run(n, agent);
     } catch (e) {
-      setNote(String(e).includes("429") ? "That's a lot of runs from your address. Try again in a minute." : "Couldn't start the agent.");
+      setNote((e as { status?: number }).status === 429 ? String((e as { detail?: string }).detail) : "Couldn't start the agent.");
     } finally {
       window.setTimeout(() => setRunning(null), 900);
     }

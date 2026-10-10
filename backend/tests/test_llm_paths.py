@@ -218,9 +218,9 @@ def test_gemini_retries_503_once_but_never_429(monkeypatch):
 
     # 429: no retry, immediate fallback, then a cooldown during which Gemini isn't called at all
     replies[:], seen[:] = [httpx.Response(429, json={"error": {"message": "quota"}})], []
-    assert asyncio.run(llm.complete_text("x", "y")) is None and len(seen) == 1
+    assert asyncio.run(llm.complete_text("x", "quota")) is None and len(seen) == 1
     assert llm.limited()
-    assert asyncio.run(llm.complete_json("x", "y")) is None and len(seen) == 1
+    assert asyncio.run(llm.complete_json("x", "cooldown")) is None and len(seen) == 1
     monkeypatch.setattr(llm, "_limited_until", 0.0)
     assert not llm.limited()
 
@@ -259,21 +259,95 @@ def test_one_gemini_call_per_payment(fake_llm):
     asyncio.run(go())
 
 
-def test_mandate_cache_skips_recompile(fake_llm, tmp_path, monkeypatch):
-    monkeypatch.setattr(mandate_mod.settings, "mandate_cache_path", str(tmp_path / "cache.json"))
-    fake_llm["json"] = {"purpose": "Support", "refund_auto_max": 50, "capabilities": ["refunds"], "budget_total": 1500}
+def _gemini_http(monkeypatch, handler):
+    import httpx
+    _use_gemini(monkeypatch)
+    seen = []
+
+    def wrapped(req):
+        seen.append(req)
+        return handler(req)
+    monkeypatch.setattr(llm, "_http", httpx.AsyncClient(transport=httpx.MockTransport(wrapped)))
+    return seen
+
+
+def _ok(text):
+    import httpx
+    return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": text}]}}]})
+
+
+def test_llm_cache_hit_miss_and_persistence(monkeypatch):
+    seen = _gemini_http(monkeypatch, lambda req: _ok('{"aligned": true, "confidence": 0.8, "concern": "", "explanation": ""}'))
+
+    async def go():
+        a = await llm.complete_json("sys", "prompt one", schema=policy_mod.INTENT_SCHEMA)
+        b = await llm.complete_json("sys", "prompt one", schema=policy_mod.INTENT_SCHEMA)  # hit
+        assert a == b and len(seen) == 1
+        await llm.complete_json("sys", "prompt two", schema=policy_mod.INTENT_SCHEMA)  # miss: different prompt
+        await llm.complete_json("sys", "prompt one")  # miss: different schema
+        await llm.complete_text("sys", "prompt one")  # miss: text, not JSON
+        assert len(seen) == 4
+        monkeypatch.setattr(llm.settings, "llm_model", "gemini-other")
+        await llm.complete_json("sys", "prompt one", schema=policy_mod.INTENT_SCHEMA)  # miss: different model
+        assert len(seen) == 5
+    asyncio.run(go())
+
+
+def test_llm_cache_survives_restart(monkeypatch):
+    seen = _gemini_http(monkeypatch, lambda req: _ok("Plain answer."))
+
+    async def go():
+        assert await llm.complete_text("sys", "explain") == "Plain answer."
+        llm.cache_reset()
+        assert await llm.complete_text("sys", "explain") == "Plain answer." and len(seen) == 1
+    asyncio.run(go())
+
+
+def test_llm_cache_evicts_oldest_first(monkeypatch):
+    seen = _gemini_http(monkeypatch, lambda req: _ok("answer"))
+    monkeypatch.setattr(llm, "CACHE_MAX", 3)
+
+    async def go():
+        for i in range(4):
+            await llm.complete_text("sys", f"p{i}")
+        assert len(seen) == 4
+        await llm.complete_text("sys", "p3")  # newest: still cached
+        await llm.complete_text("sys", "p1")  # still cached
+        assert len(seen) == 4
+        await llm.complete_text("sys", "p0")  # oldest was evicted: called again
+        assert len(seen) == 5
+        import json as _json
+        assert len(_json.loads(open(llm.settings.llm_cache_path).read())) == 3
+    asyncio.run(go())
+
+
+def test_llm_cache_never_stores_failures_or_empty_answers(monkeypatch):
+    import httpx
+    replies = [httpx.Response(500, json={"error": {"message": "boom"}}), _ok(""), _ok("not json at all"), _ok("Real answer.")]
+    seen = _gemini_http(monkeypatch, lambda req: replies.pop(0))
+    monkeypatch.setattr(llm, "_limited_until", 0.0)
+
+    async def go():
+        assert await llm.complete_text("sys", "q") is None  # HTTP error
+        assert await llm.complete_text("sys", "q") is None  # empty answer
+        assert await llm.complete_json("sys", "q") is None  # unparseable JSON
+        assert await llm.complete_text("sys", "q") == "Real answer."
+        assert len(seen) == 4  # every failure went back to Gemini; nothing bad was cached
+        import json as _json
+        assert list(_json.loads(open(llm.settings.llm_cache_path).read()).values()) == ["Real answer."]
+    asyncio.run(go())
+
+
+def test_mandate_compile_uses_the_cache(monkeypatch):
+    seen = _gemini_http(monkeypatch, lambda req: _ok(
+        '{"purpose": "Support", "refund_auto_max": 50, "capabilities": ["refunds"], "budget_total": 1500}'))
 
     async def go():
         a = await mandate_mod.compile_mandate(DEFAULT_MANDATE)
-        b = await mandate_mod.compile_mandate(DEFAULT_MANDATE)  # e.g. after a restart
-        assert fake_llm["json_calls"] == 1 and a.compiled_by == b.compiled_by == "llm+rules"
-        assert a.refund_auto_max == b.refund_auto_max == 50 and mandate_mod.verify(b)
-        # Different text is a different key; a failed Gemini call (rules only) is not cached.
-        fake_llm["json"] = None
-        c = await mandate_mod.compile_mandate(DEFAULT_MANDATE + " Never pay for gift cards.")
-        assert c.compiled_by == "rules" and fake_llm["json_calls"] == 2
-        await mandate_mod.compile_mandate(DEFAULT_MANDATE + " Never pay for gift cards.")
-        assert fake_llm["json_calls"] == 3
+        llm.cache_reset()  # e.g. a server restart
+        b = await mandate_mod.compile_mandate(DEFAULT_MANDATE)
+        assert len(seen) == 1 and a.compiled_by == b.compiled_by == "llm+rules"
+        assert b.refund_auto_max == 50 and mandate_mod.verify(b)
     asyncio.run(go())
 
 
@@ -284,14 +358,55 @@ def test_rate_limits_on_demo_runs_and_mandate_compiles():
     async def go():
         w = Warden(Simulator(), Ledger(":memory:"))
         app = build_app(w)
-        app.state.run_limiter = RateLimiter(2)
+        app.state.run_limiters = [RateLimiter(2)]
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
             codes = [(await c.post("/api/demo/run", json={"email": 99})).status_code for _ in range(3)]
             assert codes == [404, 404, 429]  # the limit applies before any work is done
             other = await c.post("/api/demo/run", json={"email": 99}, headers={"cf-connecting-ip": "203.0.113.9"})
             assert other.status_code == 404  # another address has its own budget
-            codes = [(await c.post("/api/mandate", json={"text": DEFAULT_MANDATE})).status_code for _ in range(6)]
-            assert codes == [200] * 5 + [429]
+            codes = [(await c.post("/api/mandate", json={"text": DEFAULT_MANDATE})).status_code for _ in range(4)]
+            assert codes == [200] * 3 + [429]
             r = await c.post("/api/mandate", json={"text": DEFAULT_MANDATE})
             assert r.headers["retry-after"] == "60" and "Try again in a minute" in r.json()["detail"]
+    asyncio.run(go())
+
+
+def test_429_quota_details_are_read_and_set_the_cooldown(monkeypatch):
+    import json as _json
+    import httpx
+    body = {"error": {"code": 429, "message": "You exceeded your current quota", "details": [
+        {"@type": "type.googleapis.com/google.rpc.QuotaFailure", "violations": [
+            {"quotaMetric": "generativelanguage.googleapis.com/generate_content_free_tier_requests",
+             "quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier", "quotaValue": "1000"}]},
+        {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "1800s"}]}}
+    assert llm.parse_quota(_json.dumps(body)) == {
+        "quota": "GenerateRequestsPerDayPerProjectPerModel-FreeTier", "limit": 1000, "retry_after_s": 1800.0}
+    assert llm.parse_quota("not json") == {}
+
+    _gemini_http(monkeypatch, lambda req: httpx.Response(429, json=body))
+    monkeypatch.setattr(llm, "_limited_until", 0.0)
+    assert asyncio.run(llm.complete_text("x", "daily")) is None
+    assert llm.quota_info()["limit"] == 1000
+    assert llm._limited_until - llm.time.monotonic() > 1700  # waits as long as Gemini asked, not just 60 s
+    monkeypatch.setattr(llm, "_limited_until", 0.0)
+
+
+def test_gemini_agent_runs_have_their_own_tighter_limit():
+    import httpx
+    from warden.app import RateLimiter, build_app
+
+    async def go():
+        app = build_app(Warden(Simulator(), Ledger(":memory:")))
+        app.state.gemini_run_limiters = [RateLimiter(1), RateLimiter(2, 86400)]
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+            g = lambda ip: c.post("/api/demo/run", json={"email": 99, "agent": "gemini"}, headers={"cf-connecting-ip": ip})
+            assert (await g("198.51.100.1")).status_code == 404
+            r = await g("198.51.100.1")
+            assert r.status_code == 429 and "Gemini agent runs" in r.json()["detail"]
+            # the gullible agent is unaffected
+            assert (await c.post("/api/demo/run", json={"email": 99}, headers={"cf-connecting-ip": "198.51.100.1"})).status_code == 404
+            app.state.gemini_run_limiters[0] = RateLimiter(10)  # past the per-minute window
+            assert (await g("198.51.100.1")).status_code == 404
+            r = await g("198.51.100.1")
+            assert r.status_code == 429 and "tomorrow" in r.json()["detail"]
     asyncio.run(go())

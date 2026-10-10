@@ -4,10 +4,14 @@ only ever make a decision stricter."""
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
+import os
 import re
 import time
+from collections import OrderedDict
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -20,10 +24,13 @@ GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
 SLOW_TIMEOUT_S = 25.0  # mandate compiling and agent turns, which keep the model's normal thinking
 RETRY_503_DELAY_S = 0.5
 COOLDOWN_429_S = 60.0  # after a quota error, skip Gemini (deterministic path only) for this long
+CACHE_MAX = 2000  # cached answers kept on disk; the oldest is evicted first
 
 _http: httpx.AsyncClient | None = None
 _limited_until = 0.0
 _last_429_log = 0.0
+_cache: OrderedDict[str, Any] | None = None
+_last_quota: dict[str, Any] = {}  # what Gemini's last 429 said: which quota, its limit, retry delay
 
 
 class RateLimited(RuntimeError):
@@ -39,14 +46,41 @@ def limited() -> bool:
     return time.monotonic() < _limited_until
 
 
+def parse_quota(body: str) -> dict[str, Any]:
+    """Pull the quota name, its limit and the retry delay out of a Gemini 429 body
+    (google.rpc.QuotaFailure / RetryInfo details). Missing parts are left out."""
+    out: dict[str, Any] = {}
+    try:
+        details = json.loads(body).get("error", {}).get("details", [])
+    except (ValueError, AttributeError):
+        return out
+    for d in details:
+        kind = d.get("@type", "")
+        if kind.endswith("QuotaFailure") and d.get("violations"):
+            v = d["violations"][0]
+            out["quota"] = v.get("quotaId") or v.get("quotaMetric")
+            if v.get("quotaValue") is not None:
+                out["limit"] = int(v["quotaValue"])
+        elif kind.endswith("RetryInfo") and (m := re.match(r"([\d.]+)s", str(d.get("retryDelay", "")))):
+            out["retry_after_s"] = float(m.group(1))
+    return out
+
+
+def quota_info() -> dict[str, Any]:
+    return dict(_last_quota)
+
+
 def _note_429(body: str) -> None:
-    global _limited_until, _last_429_log
+    global _limited_until, _last_429_log, _last_quota
     now = time.monotonic()
-    _limited_until = now + COOLDOWN_429_S
+    _last_quota = parse_quota(body)
+    # Gemini says how long to wait; a per-day quota can mean hours, so don't retry every minute.
+    cooldown = min(max(_last_quota.get("retry_after_s", COOLDOWN_429_S), COOLDOWN_429_S), 3600.0)
+    _limited_until = now + cooldown
     if now - _last_429_log >= 60:
         _last_429_log = now
-        log.warning("Gemini quota exceeded (429); using Warden's deterministic path for %ds. %s",
-                    int(COOLDOWN_429_S), body[:200])
+        log.warning("Gemini quota exceeded (429): %s. Using Warden's deterministic path for %ds.",
+                    _last_quota or body[:200], int(cooldown))
 
 
 def quick_thinking(model: str) -> dict[str, Any] | None:
@@ -123,15 +157,68 @@ async def _complete(system: str, user: str, cfg: dict[str, Any], quick: bool) ->
     return gemini_text(resp)
 
 
+# -- response cache ------------------------------------------------------
+# Identical prompts get identical answers, so repeated demo runs and restarts
+# reuse earlier Gemini answers instead of spending free-tier quota. Failures
+# and empty answers are never stored. Agent turns don't use this.
+
+def cache_key(kind: str, system: str, user: str, schema: dict[str, Any] | None) -> str:
+    blob = json.dumps([settings.llm_model, kind, system, user, schema], sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(blob.encode()).hexdigest()
+
+
+def _cache_load() -> OrderedDict[str, Any]:
+    global _cache
+    if _cache is None:
+        try:
+            _cache = OrderedDict(json.loads(Path(settings.llm_cache_path).read_text()))
+        except (OSError, ValueError):
+            _cache = OrderedDict()
+    return _cache
+
+
+def cache_get(key: str) -> Any | None:
+    return _cache_load().get(key)
+
+
+def cache_put(key: str, value: Any) -> None:
+    if value in (None, "", {}, []):
+        return
+    cache = _cache_load()
+    cache[key] = value
+    while len(cache) > CACHE_MAX:
+        cache.popitem(last=False)
+    path = Path(settings.llm_cache_path)
+    try:
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(cache))
+        os.replace(tmp, path)
+    except OSError:
+        pass  # a read-only disk only costs repeat calls
+
+
+def cache_reset() -> None:
+    """Forget the in-memory copy (tests, or after changing WARDEN_LLM_CACHE)."""
+    global _cache
+    _cache = None
+
+
 async def complete_json(system: str, user: str, schema: dict[str, Any] | None = None, quick: bool = True) -> Any | None:
     """Ask the model for a JSON object (JSON mode, optionally constrained by a JSON Schema).
-    quick=True uses minimal thinking and the short timeout. Returns None on any failure."""
+    quick=True uses minimal thinking and the short timeout. Cached; returns None on any failure."""
+    if not enabled():
+        return None
+    key = cache_key("json", system, user, schema)
+    if (hit := cache_get(key)) is not None:
+        return hit
     cfg: dict[str, Any] = {"responseMimeType": "application/json"}
     if schema:
         cfg["responseJsonSchema"] = schema
     try:
         text = await _complete(system, user, cfg, quick)
-        return _extract_json(text) if text else None
+        j = _extract_json(text) if text else None
+        cache_put(key, j)
+        return j
     except RateLimited:
         return None  # already logged, at most once a minute
     except Exception as exc:  # network, auth, timeout, parse
@@ -140,9 +227,16 @@ async def complete_json(system: str, user: str, schema: dict[str, Any] | None = 
 
 
 async def complete_text(system: str, user: str, quick: bool = True) -> str | None:
+    if not enabled():
+        return None
+    key = cache_key("text", system, user, None)
+    if (hit := cache_get(key)) is not None:
+        return hit
     try:
         text = await _complete(system, user, {}, quick)
-        return text.strip() if text else None
+        text = text.strip() if text else None
+        cache_put(key, text)
+        return text
     except RateLimited:
         return None
     except Exception as exc:

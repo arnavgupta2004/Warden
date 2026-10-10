@@ -10,7 +10,6 @@ import hashlib
 import hmac
 import json
 import re
-from pathlib import Path
 from typing import Any
 
 from . import llm
@@ -125,11 +124,7 @@ async def compile_mandate(text: str, agent_id: str = "backoffice-agent") -> Mand
     compiled_by = "rules"
 
     if llm.enabled():
-        j = _cache_get(text)
-        if j is None:
-            j = await llm.complete_json(LLM_SYSTEM, text, quick=False)
-            if isinstance(j, dict):
-                _cache_put(text, j)
+        j = await llm.complete_json(LLM_SYSTEM, text, quick=False)  # cached by llm on the exact text
         if isinstance(j, dict):
             compiled_by = "llm+rules"
             caps = [c for c in j.get("capabilities", []) if c in CAPABILITIES]
@@ -158,32 +153,6 @@ async def compile_mandate(text: str, agent_id: str = "backoffice-agent") -> Mand
         m.per_tx_max = m.budget_total  # no single move can exceed the whole budget
     m.trusted_payees = [Payee(**p) if isinstance(p, dict) else p for p in m.trusted_payees]
     return sign(m)
-
-
-def _cache_key(text: str) -> str:
-    return hashlib.sha256(text.strip().encode()).hexdigest()
-
-
-def _cache_load() -> dict[str, Any]:
-    try:
-        return json.loads(Path(settings.mandate_cache_path).read_text())
-    except (OSError, ValueError):
-        return {}
-
-
-def _cache_get(text: str) -> dict[str, Any] | None:
-    """Gemini's raw answer for this exact text, if compiled before. The stricter-wins merge still runs on it."""
-    hit = _cache_load().get(_cache_key(text))
-    return hit if isinstance(hit, dict) else None
-
-
-def _cache_put(text: str, j: dict[str, Any]) -> None:
-    cache = _cache_load()
-    cache[_cache_key(text)] = j
-    try:
-        Path(settings.mandate_cache_path).write_text(json.dumps(cache, indent=1))
-    except OSError:
-        pass  # a read-only disk only costs a recompile on restart
 
 
 def _canonical(m: Mandate) -> bytes:

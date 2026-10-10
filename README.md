@@ -148,7 +148,8 @@ Have your agent read emails and pages through Warden's `fetch_url` tool, or reco
 
 - **Gemini** compiles the mandate (cross-checked by a parser, stricter value wins), runs the intent check on every payment the hard rules don't block, explains each decision in plain language, drafts dispute evidence, and is the live agent in the demo.
 - **Warden never relies on the model alone.** Every hard limit, payee check, taint check and composition rule is deterministic and works with no API key. Gemini adds judgment on top, and can only make a decision stricter, never looser.
-- **Gemini is used sparingly.** Each payment gets at most one Gemini call: the intent check also writes the explanation, and only a hard block gets a separate explanation call. Compiled mandates are cached on disk. Quick calls give up after 8 seconds. If Gemini runs out of quota, Warden stops calling it for a minute and the header says "Gemini limited, rules still enforced". The public demo limits each address to 10 runs and 5 mandate changes a minute.
+- **Gemini is used sparingly, to fit its free tier.** Warden uses `gemini-3.5-flash-lite`, and each payment gets at most one Gemini call: the intent check also writes the explanation, and only a hard block gets a separate explanation call. Quick calls give up after 8 seconds. If Gemini runs out of quota, Warden waits as long as Gemini asks, uses only its deterministic rules meanwhile, and the header says "Gemini limited, rules still enforced". The public demo limits each address to 10 runs a minute (200 a day), 2 Gemini-agent runs a minute (15 a day) and 3 mandate changes a minute (20 a day).
+- **Identical prompts are cached**, so repeated demo runs reuse earlier Gemini answers instead of asking again. Failed or empty answers are never cached, and the live Gemini agent's turns are never cached.
 
 ## Project layout
 
@@ -164,7 +165,7 @@ backend/
     paypal/         real REST client + offline simulator
     app.py          REST API, websocket, webhooks, dashboard
   demo/             Kestrel & Co. inbox and the two demo agents
-  tests/            35 tests: every scenario, the MCP protocol, the PayPal client, Gemini paths
+  tests/            41 tests: every scenario, the MCP protocol, the PayPal client, Gemini paths
 frontend/           React + AG Grid dashboard and mobile approval page
 scripts/            sandbox seeding, MCP client example
 ```

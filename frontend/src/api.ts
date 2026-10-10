@@ -95,7 +95,16 @@ export interface AgentLine {
 
 async function j<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(path, { headers: { "Content-Type": "application/json" }, ...init });
-  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+  if (!r.ok) {
+    const body = await r.text();
+    let detail = body;
+    try {
+      detail = JSON.parse(body).detail ?? body;
+    } catch {
+      /* not JSON */
+    }
+    throw Object.assign(new Error(`${r.status} ${detail}`), { status: r.status, detail });
+  }
   return r.json() as Promise<T>;
 }
 

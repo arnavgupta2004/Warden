@@ -42,15 +42,15 @@ class RateLimiter:
         self.limit, self.window_s = limit, window_s
         self.hits: dict[str, deque[float]] = defaultdict(deque)
 
-    def allow(self, key: str) -> bool:
+    def full(self, key: str) -> bool:
         now = time.monotonic()
         q = self.hits[key]
         while q and now - q[0] >= self.window_s:
             q.popleft()
-        if len(q) >= self.limit:
-            return False
-        q.append(now)
-        return True
+        return len(q) >= self.limit
+
+    def hit(self, key: str) -> None:
+        self.hits[key].append(time.monotonic())
 
 
 def client_ip(request: Request) -> str:
@@ -63,10 +63,16 @@ def client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def _limit(limiter: RateLimiter, request: Request, what: str) -> None:
-    if not limiter.allow(client_ip(request)):
-        raise HTTPException(429, f"Too many {what} from your address. Try again in a minute.",
-                            headers={"Retry-After": str(int(limiter.window_s))})
+def _limit(limiters: list[RateLimiter], request: Request, what: str) -> None:
+    """Count one request against every window; refuse (without counting) if any is full."""
+    ip = client_ip(request)
+    for lim in limiters:
+        if lim.full(ip):
+            when = "in a minute" if lim.window_s <= 60 else "tomorrow"
+            raise HTTPException(429, f"Too many {what} from your address. Try again {when}.",
+                                headers={"Retry-After": str(int(lim.window_s))})
+    for lim in limiters:
+        lim.hit(ip)
 
 
 class MandateIn(BaseModel):
@@ -124,8 +130,12 @@ def build_app(warden: Warden | None = None) -> FastAPI:
     warden.fetcher = fetcher
     app.state.warden = warden
     app.state.runs: dict[str, asyncio.Task] = {}
-    app.state.run_limiter = RateLimiter(10)  # demo runs per IP per minute
-    app.state.mandate_limiter = RateLimiter(5)  # mandate compiles per IP per minute
+    # Per-address limits, sized so one visitor can't spend the Gemini free tier (assumed ~15 RPM / ~1,000 RPD
+    # for flash-lite; the real numbers show up on /api/status after the first 429). Gullible-agent runs mostly
+    # hit the response cache; Gemini-agent runs are uncached (~3-8 calls each) and mandate edits cost one call.
+    app.state.run_limiters = [RateLimiter(10), RateLimiter(200, 86400)]
+    app.state.gemini_run_limiters = [RateLimiter(2), RateLimiter(15, 86400)]
+    app.state.mandate_limiters = [RateLimiter(3), RateLimiter(20, 86400)]
     app.include_router(mcp_router)
 
     # ------------------------------------------------------------- status
@@ -136,6 +146,7 @@ def build_app(warden: Warden | None = None) -> FastAPI:
             "paypal_mode": getattr(warden.backend, "mode", "unknown"),
             "llm": llm.enabled(),
             "llm_limited": llm.enabled() and llm.limited(),
+            "llm_quota": llm.quota_info() or None,
             "llm_model": settings.llm_model if llm.enabled() else None,
             "chain": warden.ledger.verify(),
             "mandate_id": m.id if m else None,
@@ -156,7 +167,7 @@ def build_app(warden: Warden | None = None) -> FastAPI:
 
     @app.post("/api/mandate")
     async def set_mandate(body: MandateIn, request: Request) -> dict[str, Any]:
-        _limit(app.state.mandate_limiter, request, "mandate changes")
+        _limit(app.state.mandate_limiters, request, "mandate changes")
         if not body.text.strip():
             raise HTTPException(400, "empty mandate")
         m = await compile_mandate(body.text, body.agent_id)
@@ -220,7 +231,8 @@ def build_app(warden: Warden | None = None) -> FastAPI:
 
     @app.post("/api/demo/run")
     async def demo_run(body: RunIn, request: Request) -> dict[str, Any]:
-        _limit(app.state.run_limiter, request, "demo runs")
+        _limit(app.state.gemini_run_limiters if body.agent == "gemini" else app.state.run_limiters, request,
+               "Gemini agent runs" if body.agent == "gemini" else "demo runs")
         from demo.agent import make_agent
         from demo.inbox import BY_N
         if body.email not in BY_N:
