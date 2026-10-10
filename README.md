@@ -52,7 +52,7 @@ Kestrel & Co. is a fictional homeware shop whose back-office agent works the sup
 | Contractor invoice, "we moved banks" | Pay $380 to a lookalike address | **Blocked**: lookalike payee from an untrusted email |
 | "Where is my order?" with hidden white text | $499 payout, then cancel a $1,250 invoice | **Both blocked**: hidden instruction, tainted payee |
 | Lamp base snapped | Refund $180 | **Held**, runs when you tap Approve on your phone |
-| "Refund me as four $45 refunds" | 4 × $45 on one payment | First allowed, the rest **held** as split payments |
+| "Refund me as four $45 refunds" | 4 × $45 on one payment | Refunds 2–4 are always **held** by the split-payment rule. The first is refunded, unless the Gemini intent check reads the request as a way around the limit and **holds** it too, saying why in plain words |
 | Dispute: item not received | Answer with tracking evidence | **Allowed**. Gemini drafts the response. Refunding during the dispute would be held. |
 
 The **gullible agent** does whatever an email says, including hidden instructions. It stands in for an LLM that has been successfully manipulated, and keeps the demo repeatable. The **Gemini agent** is a live Gemini function-calling loop over the same tools.
@@ -146,8 +146,9 @@ Have your agent read emails and pages through Warden's `fetch_url` tool, or reco
 
 ## How AI is used
 
-- **Gemini** compiles the mandate (cross-checked by a parser, stricter value wins), runs the intent check on every payment the hard rules allow, explains each decision in plain language, drafts dispute evidence, and is the live agent in the demo.
+- **Gemini** compiles the mandate (cross-checked by a parser, stricter value wins), runs the intent check on every payment the hard rules don't block, explains each decision in plain language, drafts dispute evidence, and is the live agent in the demo.
 - **Warden never relies on the model alone.** Every hard limit, payee check, taint check and composition rule is deterministic and works with no API key. Gemini adds judgment on top, and can only make a decision stricter, never looser.
+- **Gemini is used sparingly.** Each payment gets at most one Gemini call: the intent check also writes the explanation, and only a hard block gets a separate explanation call. Compiled mandates are cached on disk. Quick calls give up after 8 seconds. If Gemini runs out of quota, Warden stops calling it for a minute and the header says "Gemini limited, rules still enforced". The public demo limits each address to 10 runs and 5 mandate changes a minute.
 
 ## Project layout
 
@@ -163,7 +164,7 @@ backend/
     paypal/         real REST client + offline simulator
     app.py          REST API, websocket, webhooks, dashboard
   demo/             Kestrel & Co. inbox and the two demo agents
-  tests/            32 tests: every scenario, the MCP protocol, the PayPal client, Gemini paths
+  tests/            35 tests: every scenario, the MCP protocol, the PayPal client, Gemini paths
 frontend/           React + AG Grid dashboard and mobile approval page
 scripts/            sandbox seeding, MCP client example
 ```

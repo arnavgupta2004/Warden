@@ -101,9 +101,12 @@ class Warden:
     async def _explain(self, call: ToolCall, d: Decision) -> str:
         if d.verdict == Verdict.ALLOW:
             return "Within the mandate." if call.tool in TOOLS and TOOLS[call.tool].kind not in ("read", "context") else "Read-only."
+        if d.explanation:  # written by the same Gemini call as the intent check
+            return d.explanation
         top = [x for x in d.findings if x.effect != Verdict.ALLOW][:3]
         fallback = top[0].message if top else ""
-        if llm.enabled():
+        # At most one Gemini call per payment: only explain separately if none happened for this decision.
+        if llm.enabled() and not d.llm_consulted:
             txt = await llm.complete_text(
                 "You explain payment-security decisions to a small-business owner in at most two short sentences. "
                 "Plain words, no jargon, no markdown.",

@@ -103,6 +103,8 @@ class Decision(BaseModel):
     explanation: str = ""
     money: float = 0.0
     counterparty: str = ""
+    # True once Gemini has been called for this decision, so the gateway never makes a second call.
+    llm_consulted: bool = False
 
 
 class LedgerEntry(BaseModel):

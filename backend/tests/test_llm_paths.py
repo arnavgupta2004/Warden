@@ -20,12 +20,14 @@ from warden.paypal import Simulator
 
 @pytest.fixture
 def fake_llm(monkeypatch):
-    state = {"json": None, "text": "Short explanation."}
+    state = {"json": None, "text": "Short explanation.", "json_calls": 0, "text_calls": 0}
 
     async def cj(system, user, **kw):
+        state["json_calls"] += 1
         return state["json"](system, user) if callable(state["json"]) else state["json"]
 
     async def ct(system, user, **kw):
+        state["text_calls"] += 1
         return state["text"]
 
     for mod in (llm, mandate_mod.llm, policy_mod.llm):
@@ -63,7 +65,9 @@ def test_intent_check_can_hold_an_otherwise_allowed_payout(fake_llm):
         assert r["status"] == "pending_approval"
         e = w.ledger.all()[0]
         assert e.verdict == Verdict.STEP_UP and any(f.rule == "intent_check" for f in e.findings)
-        assert e.explanation == "Short explanation."
+        # One call: the intent check's plain-words concern is the explanation; no separate explanation call.
+        assert e.explanation == "Paying a contractor was not part of this support task."
+        assert fake_llm["text_calls"] == 0
     asyncio.run(go())
 
 
@@ -104,7 +108,7 @@ def test_gemini_complete_json_request_shape(monkeypatch):
     assert req.headers["x-goog-api-key"] == "test-key" and "key=" not in str(req.url)
     cfg = _json.loads(req.content)["generationConfig"]
     assert cfg["responseMimeType"] == "application/json"
-    assert cfg["responseJsonSchema"]["required"] == ["aligned", "confidence", "concern"]
+    assert cfg["responseJsonSchema"]["required"] == ["aligned", "confidence", "concern", "explanation"]
     assert cfg["thinkingConfig"] == {"thinkingBudget": 0}
     assert _json.loads(req.content)["contents"][0]["parts"][0]["text"] == "Proposed action"
 
@@ -198,12 +202,96 @@ def test_gemini_agent_loop_routes_tools_through_warden(monkeypatch, fake_llm):
     asyncio.run(go())
 
 
-def test_gemini_retries_once_on_high_demand(monkeypatch):
+def test_gemini_retries_503_once_but_never_429(monkeypatch):
     import httpx
     _use_gemini(monkeypatch)
-    replies = [httpx.Response(503, json={"error": {"message": "high demand"}}),
-               httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": "ok"}]}}]})]
-    monkeypatch.setattr(llm, "_http", httpx.AsyncClient(transport=httpx.MockTransport(lambda req: replies.pop(0))))
-    real_sleep = asyncio.sleep
-    monkeypatch.setattr(llm.asyncio, "sleep", lambda s: real_sleep(0))
-    assert asyncio.run(llm.complete_text("x", "y")) == "ok" and not replies
+    monkeypatch.setattr(llm, "RETRY_503_DELAY_S", 0)
+    monkeypatch.setattr(llm, "_limited_until", 0.0)
+    ok = httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": "ok"}]}}]})
+    replies, seen = [httpx.Response(503, json={"error": {"message": "high demand"}}), ok], []
+
+    def handler(req):
+        seen.append(req)
+        return replies.pop(0)
+    monkeypatch.setattr(llm, "_http", httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    assert asyncio.run(llm.complete_text("x", "y")) == "ok" and len(seen) == 2
+
+    # 429: no retry, immediate fallback, then a cooldown during which Gemini isn't called at all
+    replies[:], seen[:] = [httpx.Response(429, json={"error": {"message": "quota"}})], []
+    assert asyncio.run(llm.complete_text("x", "y")) is None and len(seen) == 1
+    assert llm.limited()
+    assert asyncio.run(llm.complete_json("x", "y")) is None and len(seen) == 1
+    monkeypatch.setattr(llm, "_limited_until", 0.0)
+    assert not llm.limited()
+
+
+async def _decide(fake_llm, tool, args, j):
+    m = await mandate_mod.compile_mandate(DEFAULT_MANDATE)
+    w = Warden(Simulator(), Ledger(":memory:"))
+    w.set_mandate(m)
+    fake_llm["json"], fake_llm["json_calls"], fake_llm["text_calls"] = j, 0, 0
+    await w.call_tool("s", m.agent_id, tool, args, wait_for_approval=False)
+    return w.ledger.all()[0]
+
+
+def test_one_gemini_call_per_payment(fake_llm):
+    aligned = {"aligned": True, "confidence": 0.9, "concern": "", "explanation": "This refund is over your $50 limit, so it waits for you."}
+
+    async def go():
+        # Allowed by rules and Gemini: one call (the intent check), plain "Within the mandate."
+        e = await _decide(fake_llm, "create_refund", {"capture_id": "4RT88014HN112233K", "amount": 42}, aligned)
+        assert e.verdict == Verdict.ALLOW and (fake_llm["json_calls"], fake_llm["text_calls"]) == (1, 0)
+
+        # Held by a hard rule, Gemini agrees: the same call's explanation is used.
+        e = await _decide(fake_llm, "create_refund", {"capture_id": "9LM20577QW341870P", "amount": 180}, aligned)
+        assert e.verdict == Verdict.STEP_UP and e.explanation == aligned["explanation"]
+        assert (fake_llm["json_calls"], fake_llm["text_calls"]) == (1, 0)
+
+        # Held by a hard rule, Gemini call failed: deterministic message, still no second call.
+        e = await _decide(fake_llm, "create_refund", {"capture_id": "9LM20577QW341870P", "amount": 180}, None)
+        assert e.verdict == Verdict.STEP_UP and "above the $50.00" in e.explanation
+        assert (fake_llm["json_calls"], fake_llm["text_calls"]) == (1, 0)
+
+        # Blocked by a hard rule: no intent check, so exactly one explanation call.
+        e = await _decide(fake_llm, "create_payout", {"receiver_email": "maya.chen.studio@payout-desk.example", "amount": 380}, aligned)
+        assert e.verdict == Verdict.DENY and e.explanation == "Short explanation."
+        assert (fake_llm["json_calls"], fake_llm["text_calls"]) == (0, 1)
+    asyncio.run(go())
+
+
+def test_mandate_cache_skips_recompile(fake_llm, tmp_path, monkeypatch):
+    monkeypatch.setattr(mandate_mod.settings, "mandate_cache_path", str(tmp_path / "cache.json"))
+    fake_llm["json"] = {"purpose": "Support", "refund_auto_max": 50, "capabilities": ["refunds"], "budget_total": 1500}
+
+    async def go():
+        a = await mandate_mod.compile_mandate(DEFAULT_MANDATE)
+        b = await mandate_mod.compile_mandate(DEFAULT_MANDATE)  # e.g. after a restart
+        assert fake_llm["json_calls"] == 1 and a.compiled_by == b.compiled_by == "llm+rules"
+        assert a.refund_auto_max == b.refund_auto_max == 50 and mandate_mod.verify(b)
+        # Different text is a different key; a failed Gemini call (rules only) is not cached.
+        fake_llm["json"] = None
+        c = await mandate_mod.compile_mandate(DEFAULT_MANDATE + " Never pay for gift cards.")
+        assert c.compiled_by == "rules" and fake_llm["json_calls"] == 2
+        await mandate_mod.compile_mandate(DEFAULT_MANDATE + " Never pay for gift cards.")
+        assert fake_llm["json_calls"] == 3
+    asyncio.run(go())
+
+
+def test_rate_limits_on_demo_runs_and_mandate_compiles():
+    import httpx
+    from warden.app import RateLimiter, build_app
+
+    async def go():
+        w = Warden(Simulator(), Ledger(":memory:"))
+        app = build_app(w)
+        app.state.run_limiter = RateLimiter(2)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+            codes = [(await c.post("/api/demo/run", json={"email": 99})).status_code for _ in range(3)]
+            assert codes == [404, 404, 429]  # the limit applies before any work is done
+            other = await c.post("/api/demo/run", json={"email": 99}, headers={"cf-connecting-ip": "203.0.113.9"})
+            assert other.status_code == 404  # another address has its own budget
+            codes = [(await c.post("/api/mandate", json={"text": DEFAULT_MANDATE})).status_code for _ in range(6)]
+            assert codes == [200] * 5 + [429]
+            r = await c.post("/api/mandate", json={"text": DEFAULT_MANDATE})
+            assert r.headers["retry-after"] == "60" and "Try again in a minute" in r.json()["detail"]
+    asyncio.run(go())

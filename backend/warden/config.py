@@ -57,6 +57,12 @@ class Settings:
             "WARDEN_DB", str(Path(__file__).resolve().parent.parent / "warden.db")
         )
     )
+    # Gemini's compiled mandates, keyed by a hash of the text, so restarts don't recompile.
+    mandate_cache_path: str = field(
+        default_factory=lambda: os.getenv(
+            "WARDEN_MANDATE_CACHE", str(Path(__file__).resolve().parent.parent / "mandate_cache.json")
+        )
+    )
     approval_timeout_s: float = field(
         default_factory=lambda: float(os.getenv("WARDEN_APPROVAL_TIMEOUT", "45"))
     )

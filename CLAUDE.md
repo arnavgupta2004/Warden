@@ -6,7 +6,7 @@ Warden is a policy gateway between AI agents and PayPal: provenance tracking + m
 ## Run
 - Backend: `cd backend && pip install -r requirements-dev.txt && uvicorn warden.app:app --reload --port 8000`
 - Frontend: `cd frontend && npm install && npm run dev` (proxies /api, /ws, /mcp, /demo to :8000). `npm run build` writes to `backend/static`, which the backend serves.
-- Tests: `cd backend && pytest` (32 tests, about 4 s). Keep them green.
+- Tests: `cd backend && pytest` (35 tests, about 4 s). Keep them green.
 - No PAYPAL_* env → offline simulator (`warden/paypal/simulator.py`). With PAYPAL_CLIENT_ID/SECRET → real sandbox (`warden/paypal/sandbox.py`).
 - No GEMINI_API_KEY → every LLM call falls back to deterministic behavior. Gemini may only make decisions stricter. All model calls go through `warden/llm.py` (Gemini REST via httpx).
 

@@ -17,8 +17,11 @@ export function Header({ status, connected, onReset }: { status: Status | null; 
       </div>
       <div className="chips">
         <span className={`chip ${status?.paypal_mode === "sandbox" ? "chip-ok" : ""}`} title="Where payments are sent">{mode}</span>
-        <span className={`chip ${status?.llm ? "chip-ok" : ""}`} title={status?.llm_model ?? "Set GEMINI_API_KEY to enable"}>
-          {status?.llm ? "Gemini on" : "Gemini off"}
+        <span
+          className={`chip ${status?.llm && !status.llm_limited ? "chip-ok" : ""}`}
+          title={status?.llm_limited ? "Gemini hit its usage limit. Every hard rule still applies; Gemini's extra checks resume shortly." : status?.llm_model ?? "Set GEMINI_API_KEY to enable"}
+        >
+          {!status?.llm ? "Gemini off" : status.llm_limited ? "Gemini limited, rules still enforced" : "Gemini on"}
         </span>
         <span className={`chip ${status?.chain.ok ? "chip-ok" : "chip-bad"}`} title={status?.chain.tip ?? ""}>
           {status ? (status.chain.ok ? `Ledger intact, ${status.chain.records} records` : "Ledger tampered") : "Ledger"}
@@ -44,7 +47,9 @@ export function MandatePanel({ mandate, spent }: { mandate: Mandate | null; spen
       await api.setMandate(text);
       setEditing(false);
     } catch (e) {
-      setErr("Warden couldn't compile that. Check the limits are written as amounts, like $50.");
+      setErr(String(e).includes("429")
+        ? "Too many changes from your address. Try again in a minute."
+        : "Warden couldn't compile that. Check the limits are written as amounts, like $50.");
     } finally {
       setBusy(false);
     }
@@ -113,10 +118,14 @@ const SCENARIO_HINT: Record<string, string> = {
 
 export function InboxPanel({ emails, agent, setAgent, llm }: { emails: DemoEmail[]; agent: string; setAgent: (a: string) => void; llm: boolean }) {
   const [running, setRunning] = useState<number | null>(null);
+  const [note, setNote] = useState("");
   const run = async (n: number) => {
     setRunning(n);
+    setNote("");
     try {
       await api.run(n, agent);
+    } catch (e) {
+      setNote(String(e).includes("429") ? "That's a lot of runs from your address. Try again in a minute." : "Couldn't start the agent.");
     } finally {
       window.setTimeout(() => setRunning(null), 900);
     }
@@ -131,6 +140,7 @@ export function InboxPanel({ emails, agent, setAgent, llm }: { emails: DemoEmail
         </div>
       </div>
       <p className="muted small-print">A fictional shop. Hand an email to the agent and watch what reaches PayPal.</p>
+      {note && <p className="small-print" role="status">{note}</p>}
       <ul className="emails">
         {emails.map((e) => (
           <li key={e.n}>

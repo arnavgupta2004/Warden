@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
+from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -32,6 +34,40 @@ DEFAULT_MANDATE = (
     "up to $400 each. Chase unpaid invoices and answer disputes with tracking info. "
     "Never pay anyone new without asking me. Keep total spend under $1,500 a week."
 )
+
+class RateLimiter:
+    """Sliding-window limit per client IP. Keeps the public demo from burning the Gemini quota."""
+
+    def __init__(self, limit: int, window_s: float = 60.0) -> None:
+        self.limit, self.window_s = limit, window_s
+        self.hits: dict[str, deque[float]] = defaultdict(deque)
+
+    def allow(self, key: str) -> bool:
+        now = time.monotonic()
+        q = self.hits[key]
+        while q and now - q[0] >= self.window_s:
+            q.popleft()
+        if len(q) >= self.limit:
+            return False
+        q.append(now)
+        return True
+
+
+def client_ip(request: Request) -> str:
+    """CF-Connecting-IP (set by the CDN in front of Render), else the rightmost
+    X-Forwarded-For hop (added by the nearest proxy, not the client), else the socket."""
+    if ip := request.headers.get("cf-connecting-ip"):
+        return ip.strip()
+    if xff := request.headers.get("x-forwarded-for"):
+        return xff.split(",")[-1].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _limit(limiter: RateLimiter, request: Request, what: str) -> None:
+    if not limiter.allow(client_ip(request)):
+        raise HTTPException(429, f"Too many {what} from your address. Try again in a minute.",
+                            headers={"Retry-After": str(int(limiter.window_s))})
+
 
 class MandateIn(BaseModel):
     text: str
@@ -88,6 +124,8 @@ def build_app(warden: Warden | None = None) -> FastAPI:
     warden.fetcher = fetcher
     app.state.warden = warden
     app.state.runs: dict[str, asyncio.Task] = {}
+    app.state.run_limiter = RateLimiter(10)  # demo runs per IP per minute
+    app.state.mandate_limiter = RateLimiter(5)  # mandate compiles per IP per minute
     app.include_router(mcp_router)
 
     # ------------------------------------------------------------- status
@@ -97,6 +135,7 @@ def build_app(warden: Warden | None = None) -> FastAPI:
         return {
             "paypal_mode": getattr(warden.backend, "mode", "unknown"),
             "llm": llm.enabled(),
+            "llm_limited": llm.enabled() and llm.limited(),
             "llm_model": settings.llm_model if llm.enabled() else None,
             "chain": warden.ledger.verify(),
             "mandate_id": m.id if m else None,
@@ -116,7 +155,8 @@ def build_app(warden: Warden | None = None) -> FastAPI:
         return {"mandate": m.model_dump(mode="json"), "spent": spent}
 
     @app.post("/api/mandate")
-    async def set_mandate(body: MandateIn) -> dict[str, Any]:
+    async def set_mandate(body: MandateIn, request: Request) -> dict[str, Any]:
+        _limit(app.state.mandate_limiter, request, "mandate changes")
         if not body.text.strip():
             raise HTTPException(400, "empty mandate")
         m = await compile_mandate(body.text, body.agent_id)
@@ -179,7 +219,8 @@ def build_app(warden: Warden | None = None) -> FastAPI:
                  "html": localize(e.body_html)} for e in EMAILS]
 
     @app.post("/api/demo/run")
-    async def demo_run(body: RunIn) -> dict[str, Any]:
+    async def demo_run(body: RunIn, request: Request) -> dict[str, Any]:
+        _limit(app.state.run_limiter, request, "demo runs")
         from demo.agent import make_agent
         from demo.inbox import BY_N
         if body.email not in BY_N:

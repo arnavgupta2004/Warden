@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from typing import Any
 
 import httpx
@@ -17,12 +18,35 @@ log = logging.getLogger("warden.llm")
 
 GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
 SLOW_TIMEOUT_S = 25.0  # mandate compiling and agent turns, which keep the model's normal thinking
+RETRY_503_DELAY_S = 0.5
+COOLDOWN_429_S = 60.0  # after a quota error, skip Gemini (deterministic path only) for this long
 
 _http: httpx.AsyncClient | None = None
+_limited_until = 0.0
+_last_429_log = 0.0
+
+
+class RateLimited(RuntimeError):
+    pass
 
 
 def enabled() -> bool:
     return settings.llm_enabled
+
+
+def limited() -> bool:
+    """True while Gemini is cooling down after a quota (429) error."""
+    return time.monotonic() < _limited_until
+
+
+def _note_429(body: str) -> None:
+    global _limited_until, _last_429_log
+    now = time.monotonic()
+    _limited_until = now + COOLDOWN_429_S
+    if now - _last_429_log >= 60:
+        _last_429_log = now
+        log.warning("Gemini quota exceeded (429); using Warden's deterministic path for %ds. %s",
+                    int(COOLDOWN_429_S), body[:200])
 
 
 def quick_thinking(model: str) -> dict[str, Any] | None:
@@ -44,20 +68,27 @@ def quick_thinking(model: str) -> dict[str, Any] | None:
 
 async def gemini_generate(body: dict[str, Any], timeout: float = SLOW_TIMEOUT_S) -> dict[str, Any]:
     """POST a generateContent request to Gemini and return the raw response.
-    Raises on HTTP errors and on asyncio.TimeoutError past `timeout` seconds."""
+    Raises RateLimited during a quota cooldown, RuntimeError on other HTTP
+    errors, and asyncio.TimeoutError past `timeout` seconds."""
     global _http
+    if limited():
+        raise RateLimited("Gemini is cooling down after a quota error")
     if _http is None:
         _http = httpx.AsyncClient(timeout=SLOW_TIMEOUT_S + 5)
+
     async def post() -> httpx.Response:
         url = f"{GEMINI_BASE}/models/{settings.llm_model}:generateContent"
         headers = {"x-goog-api-key": settings.gemini_api_key}
         r = await _http.post(url, headers=headers, json=body)
-        if r.status_code in (429, 500, 503):  # "high demand" blips: one retry, still inside the hard timeout
-            await asyncio.sleep(1)
+        if r.status_code == 503:  # "high demand" blip: one retry, still inside the hard timeout
+            await asyncio.sleep(RETRY_503_DELAY_S)
             r = await _http.post(url, headers=headers, json=body)
         return r
 
     r = await asyncio.wait_for(post(), timeout)
+    if r.status_code == 429:  # quota: never retry; fall back now and cool down
+        _note_429(r.text)
+        raise RateLimited("Gemini quota exceeded")
     if r.status_code >= 400:
         raise RuntimeError(f"Gemini {r.status_code}: {r.text[:300]}")
     return r.json()
@@ -101,6 +132,8 @@ async def complete_json(system: str, user: str, schema: dict[str, Any] | None = 
     try:
         text = await _complete(system, user, cfg, quick)
         return _extract_json(text) if text else None
+    except RateLimited:
+        return None  # already logged, at most once a minute
     except Exception as exc:  # network, auth, timeout, parse
         log.warning("LLM call failed: %r", exc)
         return None
@@ -110,6 +143,8 @@ async def complete_text(system: str, user: str, quick: bool = True) -> str | Non
     try:
         text = await _complete(system, user, {}, quick)
         return text.strip() if text else None
+    except RateLimited:
+        return None
     except Exception as exc:
         log.warning("LLM call failed: %r", exc)
         return None
