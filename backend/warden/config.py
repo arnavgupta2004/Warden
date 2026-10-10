@@ -44,7 +44,7 @@ class Settings:
     paypal_mode: str = field(default_factory=lambda: os.getenv("WARDEN_PAYPAL_MODE", ""))
 
     gemini_api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY", ""))
-    llm_model: str = field(default_factory=lambda: os.getenv("WARDEN_GEMINI_MODEL", "gemini-2.5-flash"))
+    llm_model: str = field(default_factory=lambda: os.getenv("WARDEN_GEMINI_MODEL", "gemini-3.5-flash"))
     llm_disabled: bool = field(default_factory=lambda: _bool("WARDEN_DISABLE_LLM"))
     # Hard limit for the quick calls (intent check, explanations); past it Warden uses its deterministic path.
     llm_timeout_s: float = field(default_factory=lambda: float(os.getenv("WARDEN_LLM_TIMEOUT", "8")))

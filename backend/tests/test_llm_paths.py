@@ -115,7 +115,7 @@ def test_gemini_complete_json_request_shape(monkeypatch):
 
 
 def test_quick_thinking_matches_model_family():
-    assert llm.quick_thinking("gemini-3.8-flash") == {"thinkingLevel": "MINIMAL"}
+    assert llm.quick_thinking("gemini-3.8-flash") == {"thinkingLevel": "LOW"}  # 3.8-flash rejects MINIMAL
     assert llm.quick_thinking("gemini-3-pro-preview") == {"thinkingLevel": "LOW"}
     assert llm.quick_thinking("gemini-2.5-flash-lite") == {"thinkingBudget": 0}
     assert llm.quick_thinking("gemini-2.5-pro") == {"thinkingBudget": 128}
@@ -196,3 +196,14 @@ def test_gemini_agent_loop_routes_tools_through_warden(monkeypatch, fake_llm):
         assert "parameters" not in decls["list_invoices"] and "reason" in decls["create_payout"]["parameters"]["properties"]
         assert not w.backend.payouts
     asyncio.run(go())
+
+
+def test_gemini_retries_once_on_high_demand(monkeypatch):
+    import httpx
+    _use_gemini(monkeypatch)
+    replies = [httpx.Response(503, json={"error": {"message": "high demand"}}),
+               httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": "ok"}]}}]})]
+    monkeypatch.setattr(llm, "_http", httpx.AsyncClient(transport=httpx.MockTransport(lambda req: replies.pop(0))))
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(llm.asyncio, "sleep", lambda s: real_sleep(0))
+    assert asyncio.run(llm.complete_text("x", "y")) == "ok" and not replies

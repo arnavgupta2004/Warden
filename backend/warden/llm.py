@@ -27,15 +27,16 @@ def enabled() -> bool:
 
 def quick_thinking(model: str) -> dict[str, Any] | None:
     """thinkingConfig for low-latency calls. Gemini 3+ takes thinkingLevel (an error on
-    older models); 2.5 takes thinkingBudget, where Pro cannot go below 128. Models
-    without thinking reject thinkingConfig entirely, so they get none."""
+    older models). LOW is the one level every Gemini 3+ model accepts; MINIMAL is
+    rejected by some (e.g. gemini-3.8-flash). 2.5 takes thinkingBudget, where Pro
+    cannot go below 128. Models without thinking reject thinkingConfig entirely."""
     m = re.match(r"gemini-(\d+)(?:\.(\d+))?", model)
     if not m:
         return None
     major, minor = int(m.group(1)), int(m.group(2) or 0)
     pro = "-pro" in model
     if major >= 3:
-        return {"thinkingLevel": "LOW" if pro else "MINIMAL"}
+        return {"thinkingLevel": "LOW"}
     if (major, minor) >= (2, 5):
         return {"thinkingBudget": 128 if pro else 0}
     return None
@@ -47,10 +48,16 @@ async def gemini_generate(body: dict[str, Any], timeout: float = SLOW_TIMEOUT_S)
     global _http
     if _http is None:
         _http = httpx.AsyncClient(timeout=SLOW_TIMEOUT_S + 5)
-    r = await asyncio.wait_for(
-        _http.post(f"{GEMINI_BASE}/models/{settings.llm_model}:generateContent",
-                   headers={"x-goog-api-key": settings.gemini_api_key}, json=body),
-        timeout)
+    async def post() -> httpx.Response:
+        url = f"{GEMINI_BASE}/models/{settings.llm_model}:generateContent"
+        headers = {"x-goog-api-key": settings.gemini_api_key}
+        r = await _http.post(url, headers=headers, json=body)
+        if r.status_code in (429, 500, 503):  # "high demand" blips: one retry, still inside the hard timeout
+            await asyncio.sleep(1)
+            r = await _http.post(url, headers=headers, json=body)
+        return r
+
+    r = await asyncio.wait_for(post(), timeout)
     if r.status_code >= 400:
         raise RuntimeError(f"Gemini {r.status_code}: {r.text[:300]}")
     return r.json()
