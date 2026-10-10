@@ -277,5 +277,10 @@ class PayPalSandbox:
             "webhook_id": webhook_id,
             "webhook_event": event,
         }
-        r = await self._req("POST", "/v1/notifications/verify-webhook-signature", body)
+        if not all(body[k] for k in ("auth_algo", "cert_url", "transmission_id", "transmission_sig", "transmission_time")):
+            return False  # unsigned: not from PayPal
+        try:
+            r = await self._req("POST", "/v1/notifications/verify-webhook-signature", body)
+        except PayPalError:
+            return False  # PayPal rejected the signature data
         return r.get("verification_status") == "SUCCESS"

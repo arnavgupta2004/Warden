@@ -337,3 +337,39 @@ def test_sandbox_seed_env_merges_over_file_and_gates_email_6(tmp_path, monkeypat
             assert inbox.sandbox_ids()["4RT88014HN112233K"] == "FILECAP"  # bad JSON is ignored, not fatal
     asyncio.run(go())
     inbox.sandbox_ids.cache_clear()
+
+
+
+def test_webhook_verification_rejects_unsigned_or_invalid_events():
+    from warden.app import build_app
+    from warden.config import settings
+    from warden.gateway import Warden
+    from warden.ledger import Ledger
+
+    calls = []
+
+    def verify(req):
+        calls.append(json.loads(req.content))
+        if json.loads(req.content)["transmission_sig"] == "bad":
+            return httpx.Response(400, json={"name": "VALIDATION_ERROR", "message": "Invalid data provided"})
+        return httpx.Response(200, json={"verification_status": "SUCCESS"})
+
+    async def go():
+        pp, _ = _client({("POST", "/v1/notifications/verify-webhook-signature"): verify})
+        old = settings.paypal_webhook_id
+        settings.paypal_webhook_id = "WH-1"
+        try:
+            app = build_app(Warden(pp, Ledger(":memory:")))
+            ev = {"event_type": "PAYMENT.CAPTURE.REFUNDED", "resource": {"id": "REF1"}}
+            sig = {"paypal-auth-algo": "SHA256withRSA", "paypal-cert-url": "https://api.sandbox.paypal.com/cert",
+                   "paypal-transmission-id": "t1", "paypal-transmission-time": "2026-10-10T00:00:00Z"}
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+                r = await c.post("/webhooks/paypal", json=ev)  # no signature headers at all
+                assert r.status_code == 400 and not calls  # rejected without asking PayPal
+                r = await c.post("/webhooks/paypal", json=ev, headers={**sig, "paypal-transmission-sig": "bad"})
+                assert r.status_code == 400 and len(calls) == 1  # PayPal said invalid: 400, not a crash
+                r = await c.post("/webhooks/paypal", json=ev, headers={**sig, "paypal-transmission-sig": "good"})
+                assert r.status_code == 200 and calls[-1]["webhook_id"] == "WH-1"
+        finally:
+            settings.paypal_webhook_id = old
+    asyncio.run(go())
