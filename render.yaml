@@ -17,6 +17,9 @@ services:
         sync: false
       - key: WARDEN_LLM_DAILY_CAP
         value: "700"
+      # Hosted-demo hardening: mandate ceilings, one shared budget, auto-revert of mandate edits
+      - key: WARDEN_PUBLIC_DEMO
+        value: "1"
       # JSON with the sandbox invoice and dispute ids, e.g. {"invoices": {...}, "disputes": {...}}
       - key: WARDEN_SANDBOX_SEED
         sync: false

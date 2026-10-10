@@ -79,6 +79,8 @@ Click **Give to agent** on any email in the inbox panel.
 
 **Hosted demo:** the free Render instance sleeps when idle, so the first visit can take up to a minute to wake. Click **Reset demo** for a clean run: in sandbox mode it also creates fresh sandbox payments for the refund emails.
 
+The hosted demo runs with `WARDEN_PUBLIC_DEMO=1`. Visitors can edit and compile the mandate, but server-side ceilings apply whatever it says: $1,500 a week, $500 per payment, and the default trusted payees plus at most two more. Clamped values show "capped for the public demo". Every agent id (dashboard, REST, MCP) shares that one budget, so the sandbox balance can't be drained. **Reset demo**, or 15 minutes without activity, brings back the default mandate. Approvals stay open so anyone can try **Approve**, and the ledger records each approver's address.
+
 ### Use the real PayPal sandbox
 
 1. Create a sandbox REST app at [developer.paypal.com](https://developer.paypal.com/dashboard/applications/sandbox) and copy `.env.example` to `.env`.

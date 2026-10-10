@@ -110,11 +110,12 @@ class Ledger:
         ).fetchall()
         return [LedgerEntry.model_validate_json(r[0]) for r in rows]
 
-    def spent(self, agent_id: str, since: float) -> float:
+    def spent(self, agent_id: str | None, since: float) -> float:
+        """Money moved since `since`, for one agent, or for every agent when agent_id is None."""
         row = self.db.execute(
-            "SELECT COALESCE(SUM(money),0) FROM entries WHERE agent_id=? AND at>=? AND status IN ('executed','settled') "
-            "AND tool IN ('create_refund','create_payout','accept_dispute_claim')",
-            (agent_id, since),
+            "SELECT COALESCE(SUM(money),0) FROM entries WHERE (? IS NULL OR agent_id=?) AND at>=? "
+            "AND status IN ('executed','settled') AND tool IN ('create_refund','create_payout','accept_dispute_claim')",
+            (agent_id, agent_id, since),
         ).fetchone()
         return float(row[0] or 0)
 

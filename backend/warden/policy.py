@@ -19,6 +19,7 @@ import time
 from typing import Any, Protocol
 
 from . import llm
+from .config import settings
 from .ledger import Ledger
 from .mandate import verify as verify_mandate
 from .models import Decision, Finding, LedgerEntry, Mandate, ToolCall, Trust, Verdict
@@ -162,7 +163,8 @@ class PolicyEngine:
                 f.append(_f("per_tx_limit", "high", Verdict.DENY,
                             f"{_usd(money)} is above the {_usd(mandate.per_tx_max)} single-payment cap."))
             since = time.time() - WINDOW_S[mandate.budget_window]
-            spent = self.ledger.spent(call.agent_id, since)
+            # The public demo shares one budget across every agent id (REST, MCP, demo agents).
+            spent = self.ledger.spent(None if settings.public_demo else call.agent_id, since)
             if mandate.budget_total and spent + money > mandate.budget_total:
                 f.append(_f("budget", "high", Verdict.DENY,
                             f"Would bring spend to {_usd(spent + money)}, over the {_usd(mandate.budget_total)} {mandate.budget_window} budget.",

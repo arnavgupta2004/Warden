@@ -51,6 +51,7 @@ export interface Mandate {
   new_payee_requires_approval: boolean;
   max_moves_per_hour: number;
   compiled_by: string;
+  public_demo_caps: string[];
   signature: string;
 }
 

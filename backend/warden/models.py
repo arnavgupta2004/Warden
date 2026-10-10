@@ -55,6 +55,7 @@ class Mandate(BaseModel):
     expires_at: float | None = None
     created_at: float = Field(default_factory=time.time)
     compiled_by: str = "rules"  # "llm" or "rules"
+    public_demo_caps: list[str] = Field(default_factory=list)  # fields clamped by the public-demo ceilings
     signature: str = ""
 
     def payee_by_email(self, email: str) -> Payee | None:

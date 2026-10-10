@@ -103,6 +103,39 @@ def parse_rules(text: str) -> dict[str, Any]:
     return out
 
 
+DEFAULT_MANDATE = (
+    "Run customer support and payables for Kestrel & Co. Refund customers up to $50 on your own; anything bigger, ask me. "
+    "Pay our contractors Maya Chen (maya@chenstudio.example) and Diego Alvarez (diego.alvarez@lumenfreight.example) "
+    "up to $400 each. Chase unpaid invoices and answer disputes with tracking info. "
+    "Never pay anyone new without asking me. Keep total spend under $1,500 a week."
+)
+
+# Public-demo ceilings (WARDEN_PUBLIC_DEMO=1): no mandate can go past these, whatever its text says.
+PUBLIC_BUDGET_WEEK = 1500.0
+PUBLIC_PER_TX_MAX = 500.0
+PUBLIC_EXTRA_PAYEES = 2
+
+
+def apply_public_demo_ceilings(data: dict[str, Any]) -> list[str]:
+    """Clamp a compiled mandate (in place) to the public-demo ceilings. Returns the clamped field names."""
+    caps: list[str] = []
+    if data.get("budget_window", "week") != "week" or not data.get("budget_total") or data["budget_total"] > PUBLIC_BUDGET_WEEK:
+        data["budget_window"] = "week"
+        data["budget_total"] = min(data.get("budget_total") or PUBLIC_BUDGET_WEEK, PUBLIC_BUDGET_WEEK)
+        caps.append("budget_total")
+    if not data.get("per_tx_max") or data["per_tx_max"] > PUBLIC_PER_TX_MAX:
+        data["per_tx_max"] = PUBLIC_PER_TX_MAX
+        caps.append("per_tx_max")
+    defaults = {p["email"] for p in parse_rules(DEFAULT_MANDATE)["trusted_payees"]}
+    payees = [p if isinstance(p, dict) else p.model_dump() for p in data.get("trusted_payees", [])]
+    extra = [p for p in payees if p["email"] not in defaults]
+    if len(extra) > PUBLIC_EXTRA_PAYEES:
+        keep = {p["email"] for p in extra[:PUBLIC_EXTRA_PAYEES]}
+        data["trusted_payees"] = [p for p in payees if p["email"] in defaults or p["email"] in keep]
+        caps.append("trusted_payees")
+    return caps
+
+
 LLM_SYSTEM = """You compile a business owner's plain-English instructions for an AI agent into a strict
 spending mandate for PayPal operations. Be conservative: when the text is ambiguous, choose the
 stricter limit. Never invent payees. Output JSON with keys:
@@ -151,9 +184,10 @@ async def compile_mandate(text: str, agent_id: str = "backoffice-agent") -> Mand
                     seen.add(e)
 
     data = {k: v for k, v in data.items() if v is not None}
-    m = Mandate(agent_id=agent_id, compiled_by=compiled_by, **data)
-    if not m.per_tx_max:
-        m.per_tx_max = m.budget_total  # no single move can exceed the whole budget
+    if not data.get("per_tx_max"):
+        data["per_tx_max"] = data.get("budget_total")  # no single move can exceed the whole budget
+    caps = apply_public_demo_ceilings(data) if settings.public_demo else []
+    m = Mandate(agent_id=agent_id, compiled_by=compiled_by, public_demo_caps=caps, **data)
     m.trusted_payees = [Payee(**p) if isinstance(p, dict) else p for p in m.trusted_payees]
     return sign(m)
 

@@ -66,6 +66,8 @@ export function MandatePanel({ mandate, spent }: { mandate: Mandate | null; spen
       setBusy(false);
     }
   };
+  const capped = (field: string) =>
+    mandate.public_demo_caps?.includes(field) ? <span className="capped"> capped for the public demo</span> : null;
   return (
     <section className="panel mandate">
       <div className="panel-head">
@@ -89,7 +91,7 @@ export function MandatePanel({ mandate, spent }: { mandate: Mandate | null; spen
       <div className="budget">
         <div className="budget-line">
           <span>Spent this {mandate.budget_window}</span>
-          <span className="tabular">{money(spent)} of {money(mandate.budget_total)}</span>
+          <span className="tabular">{money(spent)} of {money(mandate.budget_total)}{capped("budget_total")}</span>
         </div>
         <div className="meter" role="meter" aria-valuenow={spent} aria-valuemax={mandate.budget_total}>
           <span style={{ width: `${pct}%` }} />
@@ -98,11 +100,11 @@ export function MandatePanel({ mandate, spent }: { mandate: Mandate | null; spen
       <dl className="rules">
         {mandate.refund_auto_max != null && (<><dt>Refunds without asking</dt><dd>up to {money(mandate.refund_auto_max)}</dd></>)}
         {mandate.auto_approve_below > 0 && (<><dt>Ask above</dt><dd>{money(mandate.auto_approve_below)}</dd></>)}
-        <dt>Single payment cap</dt><dd>{money(mandate.per_tx_max)}</dd>
+        <dt>Single payment cap</dt><dd>{money(mandate.per_tx_max)}{capped("per_tx_max")}</dd>
         <dt>New payees</dt><dd>{mandate.new_payee_requires_approval ? "need your approval" : "allowed"}</dd>
       </dl>
       <div className="payees">
-        <div className="sub">Trusted payees</div>
+        <div className="sub">Trusted payees{capped("trusted_payees")}</div>
         {mandate.trusted_payees.length === 0 && <p className="muted">None. Every payout needs approval.</p>}
         {mandate.trusted_payees.map((p) => (
           <div className="payee" key={p.email}>

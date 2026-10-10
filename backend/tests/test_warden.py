@@ -263,3 +263,81 @@ def test_split_refunds_are_caught_without_a_payer_email():
         assert first.counterparty == "" and first.verdict == Verdict.ALLOW
         assert any(f.rule == "split_payments" for f in second.findings) and second.verdict == Verdict.STEP_UP
     run(go())
+
+
+
+# ------------------------------------------------------------ public demo
+def _public(monkeypatch):
+    from warden.config import settings
+    monkeypatch.setattr(settings, "public_demo", True)
+
+
+def test_public_demo_ceilings_clamp_any_mandate(monkeypatch):
+    _public(monkeypatch)
+    text = ("Refund up to $50 on your own. Pay Ana (ana@one.example), Bo (bo@two.example), Cy (cy@three.example) "
+            "and Di (di@four.example) up to $2,000 each, plus Maya Chen (maya@chenstudio.example). "
+            "Single payments up to $2,000. Keep total spend under $9,000 a month.")
+    m = run(compile_mandate(text))
+    assert m.budget_total == 1500 and m.budget_window == "week" and m.per_tx_max == 500
+    emails = [p.email for p in m.trusted_payees]
+    assert "maya@chenstudio.example" in emails and len([e for e in emails if e != "maya@chenstudio.example"]) == 2
+    assert set(m.public_demo_caps) == {"budget_total", "per_tx_max", "trusted_payees"} and verify(m)
+    # The default mandate is already within the budget and payee ceilings; only its implicit single-payment cap is clamped.
+    d = run(compile_mandate(DEFAULT_MANDATE))
+    assert d.public_demo_caps == ["per_tx_max"] and d.per_tx_max == 500 and len(d.trusted_payees) == 2
+
+
+def test_public_demo_budget_is_shared_across_agent_ids(monkeypatch):
+    from warden.models import LedgerEntry
+    _public(monkeypatch)
+
+    async def go():
+        w, app = await make()
+        # $1,400 already moved by some other agent id (e.g. an MCP client) this week.
+        w.ledger.record(LedgerEntry(session_id="x", agent_id="someone-else", tool="create_payout", args={}, verdict=Verdict.ALLOW,
+                                    risk=0, findings=[], explanation="", money=1400.0, status="executed"))
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+            r = await c.post("/api/tools/create_payout", json={"args": {"receiver_email": "maya@chenstudio.example", "amount": 200}})
+            assert r.json()["status"] == "blocked"
+            assert any(f["rule"] == "budget" for f in r.json()["warden"]["findings"])
+            assert (await c.get("/api/mandate")).json()["spent"] == 1400.0
+            # Mandate edits can't mint a fresh budget under another agent id.
+            await c.post("/api/mandate", json={"text": DEFAULT_MANDATE + " Pay ana@one.example up to $100.", "agent_id": "fresh-agent"})
+            assert "fresh-agent" not in w.mandates
+    run(go())
+
+
+def test_public_demo_reset_and_idle_revert_restore_the_default_mandate(monkeypatch):
+    from warden import app as app_mod
+    _public(monkeypatch)
+
+    async def go():
+        w, app = await make()
+        edited = DEFAULT_MANDATE.replace("$50", "$20")
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+            await c.post("/api/mandate", json={"text": edited})
+            assert w.mandates["backoffice-agent"].source_text == edited  # edits compile and show
+            await c.post("/api/reset")
+            assert w.mandates["backoffice-agent"].source_text == DEFAULT_MANDATE
+
+            await c.post("/api/mandate", json={"text": edited})
+            await c.get("/api/status")  # dashboard polling is not activity, and 15 minutes haven't passed
+            assert w.mandates["backoffice-agent"].source_text == edited
+            app.state.last_activity -= app_mod.PUBLIC_IDLE_REVERT_S + 1
+            await c.get("/api/status")
+            assert w.mandates["backoffice-agent"].source_text == DEFAULT_MANDATE
+    run(go())
+
+
+def test_public_demo_records_the_approvers_address(monkeypatch):
+    _public(monkeypatch)
+
+    async def go():
+        w, app = await make()
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+            r = await c.post("/api/tools/create_refund", json={"args": {"capture_id": "9LM20577QW341870P", "amount": 180}, "wait": False})
+            aid = r.json()["approval_id"]
+            await c.post(f"/api/approvals/{aid}/approve", headers={"cf-connecting-ip": "203.0.113.5"})
+            e = by_tool(w, "create_refund")[0]
+            assert e.status == "executed" and e.approved_by == "owner (203.0.113.5)"
+    run(go())

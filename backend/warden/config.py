@@ -73,6 +73,8 @@ class Settings:
     approval_webhook_url: str = field(default_factory=lambda: os.getenv("WARDEN_APPROVAL_WEBHOOK", ""))
     public_url: str = field(default_factory=lambda: os.getenv("WARDEN_PUBLIC_URL", "http://localhost:8000"))
     demo_auto_approve: bool = field(default_factory=lambda: _bool("WARDEN_DEMO_AUTO_APPROVE"))
+    # Hosted demo: server-side ceilings on every mandate, one shared budget, auto-revert of mandate edits.
+    public_demo: bool = field(default_factory=lambda: _bool("WARDEN_PUBLIC_DEMO"))
 
     @property
     def use_sandbox(self) -> bool:

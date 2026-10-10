@@ -22,20 +22,15 @@ from . import llm
 from .config import settings
 from .gateway import Warden
 from .ledger import Ledger
-from .mandate import compile_mandate
+from .mandate import DEFAULT_MANDATE, compile_mandate
 from .mcp import router as mcp_router, tool_list
 from .paypal import make_backend
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
 log = logging.getLogger("warden.app")
+PUBLIC_IDLE_REVERT_S = 15 * 60
 
-DEFAULT_MANDATE = (
-    "Run customer support and payables for Kestrel & Co. Refund customers up to $50 on your own; anything bigger, ask me. "
-    "Pay our contractors Maya Chen (maya@chenstudio.example) and Diego Alvarez (diego.alvarez@lumenfreight.example) "
-    "up to $400 each. Chase unpaid invoices and answer disputes with tracking info. "
-    "Never pay anyone new without asking me. Keep total spend under $1,500 a week."
-)
 
 class RateLimiter:
     """Sliding-window limit per client IP. Keeps the public demo from burning the Gemini quota."""
@@ -152,6 +147,23 @@ def build_app(warden: Warden | None = None) -> FastAPI:
     app.state.gemini_run_limiters = [RateLimiter(2), RateLimiter(15, 86400)]
     app.state.mandate_limiters = [RateLimiter(3), RateLimiter(20, 86400)]
     app.state.reset_limiters = [RateLimiter(3)]  # each sandbox reset creates three PayPal orders
+    app.state.last_activity = time.monotonic()  # last POST; drives the public demo's mandate auto-revert
+
+    async def restore_default_mandate() -> None:
+        warden.set_mandate(await compile_mandate(DEFAULT_MANDATE))
+
+    @app.middleware("http")
+    async def public_demo_revert(request: Request, call_next):
+        """Public demo: put back the default mandate after PUBLIC_IDLE_REVERT_S without any POST."""
+        if settings.public_demo:
+            now = time.monotonic()
+            m = warden.mandates.get("backoffice-agent")
+            if m and m.source_text != DEFAULT_MANDATE and now - app.state.last_activity > PUBLIC_IDLE_REVERT_S:
+                await restore_default_mandate()
+                log.info("Public demo: mandate edit reverted after inactivity.")
+            if request.method == "POST":
+                app.state.last_activity = now
+        return await call_next(request)
     app.include_router(mcp_router)
 
     # ------------------------------------------------------------- status
@@ -180,7 +192,7 @@ def build_app(warden: Warden | None = None) -> FastAPI:
             raise HTTPException(404, "no mandate")
         since_map = {"day": 86400, "week": 7 * 86400, "month": 30 * 86400, "total": 10**10}
         import time as _t
-        spent = warden.ledger.spent(agent_id, _t.time() - since_map[m.budget_window])
+        spent = warden.ledger.spent(None if settings.public_demo else agent_id, _t.time() - since_map[m.budget_window])
         return {"mandate": m.model_dump(mode="json"), "spent": spent}
 
     @app.post("/api/mandate")
@@ -188,7 +200,8 @@ def build_app(warden: Warden | None = None) -> FastAPI:
         _limit(app.state.mandate_limiters, request, "mandate changes")
         if not body.text.strip():
             raise HTTPException(400, "empty mandate")
-        m = await compile_mandate(body.text, body.agent_id)
+        # The public demo has one agent and one budget: edits can't create mandates for other agent ids.
+        m = await compile_mandate(body.text, "backoffice-agent" if settings.public_demo else body.agent_id)
         warden.set_mandate(m)
         return {"mandate": m.model_dump(mode="json")}
 
@@ -218,6 +231,8 @@ def build_app(warden: Warden | None = None) -> FastAPI:
         if action not in ("approve", "deny"):
             raise HTTPException(400, "action must be approve or deny")
         by = request.headers.get("x-warden-user", "owner")
+        if settings.public_demo:  # approvals stay open to judges; record where each decision came from
+            by = f"{by} ({client_ip(request)})"
         a = await warden.decide(aid, action == "approve", by)
         if not a:
             raise HTTPException(404, "unknown approval")
@@ -266,7 +281,9 @@ def build_app(warden: Warden | None = None) -> FastAPI:
     async def reset(request: Request) -> dict[str, Any]:
         _limit(app.state.reset_limiters, request, "resets")
         warden.reset()
-        if "backoffice-agent" in warden.mandates:
+        if settings.public_demo:
+            await restore_default_mandate()  # a reset always brings back the owner's original rules
+        elif "backoffice-agent" in warden.mandates:
             warden.set_mandate(warden.mandates["backoffice-agent"])
         out: dict[str, Any] = {"ok": True}
         if getattr(warden.backend, "mode", "") == "sandbox":
